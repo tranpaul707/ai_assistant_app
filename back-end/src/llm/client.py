@@ -1,18 +1,20 @@
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, prompt
 from langchain_ollama.llms import OllamaLLM
 import asyncio
 
 llm = OllamaLLM(model="llama3.1", temperature=0)
 
-prompt = None
+async def handle_query(query):
+    template = ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful and kind AI assistant who enjoys responding in a helpful tone"),
+        ("human", "{question}")
+        ])
+    
+    prompt = template.invoke({"question": query})
 
-async def wait_for_prompt():
-    global prompt
-    while prompt is None:
-        print("Waiting for response")
-        await asyncio.sleep(1)
+    response = await llm.ainvoke(prompt)
 
+    print(response)
 
 if __name__ == "__main__":
-    asyncio.run(wait_for_prompt())
-    
+    asyncio.run(handle_query("What is React?"))
