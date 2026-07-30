@@ -1,5 +1,6 @@
 {
   "venvPath": ".",
   "venv": ".venv",
-  "include": ["back-end"]
+  "include": ["back-end"],
+  "extraPaths": ["back-end/src"]
 }
