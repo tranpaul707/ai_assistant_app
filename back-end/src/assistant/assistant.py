@@ -11,8 +11,3 @@ def handle_query(query):
 
     for chunk in llm.stream(prompt):
         yield chunk
-
-if __name__ == "__main__":
-    for chunk in handle_query("What is React?"):
-        print(chunk, end="", flush=True)
-    print()  # final newline
