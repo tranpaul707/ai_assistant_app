@@ -1,2 +1,4 @@
-langchain>=1.3
+fastapi
+uvicorn
+langchain-core
 langchain-ollama>=0.3
