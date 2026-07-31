@@ -182,3 +182,158 @@
     border-right-color: var(--border);
   }
 }
+
+.chat-app {
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--bg);
+}
+
+.chat-header {
+  padding: 28px 32px 22px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-header h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  letter-spacing: -0.5px;
+}
+
+.chat-header p {
+  font-size: 15px;
+}
+
+.messages {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 32px 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.empty-state {
+  margin: auto;
+  padding: 48px 16px;
+  text-align: center;
+}
+
+.empty-state h2 {
+  margin-bottom: 8px;
+}
+
+.message {
+  max-width: 78%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  text-align: left;
+}
+
+.message.user {
+  align-self: flex-end;
+  color: var(--text-h);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: var(--code-bg);
+}
+
+.message-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.message p {
+  color: var(--text-h);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.composer {
+  width: min(760px, calc(100% - 32px));
+  margin: 0 auto 24px;
+  padding: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.composer textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 160px;
+  padding: 10px 12px;
+  resize: vertical;
+  box-sizing: border-box;
+  color: var(--text-h);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+}
+
+.composer button {
+  min-height: 44px;
+  padding: 0 18px;
+  color: white;
+  background: var(--accent);
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 600px) {
+  .chat-header {
+    padding: 22px 20px 18px;
+  }
+
+  .messages {
+    padding: 24px 16px;
+  }
+
+  .message {
+    max-width: 88%;
+  }
+
+  .composer {
+    margin-bottom: 16px;
+  }
+}

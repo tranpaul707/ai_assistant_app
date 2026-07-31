@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
+.webui_secret_key
