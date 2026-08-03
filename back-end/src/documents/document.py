@@ -4,6 +4,7 @@ from langchain_community.document_loaders import (
     TextLoader,
     Docx2txtLoader,
 )
+import asyncio
 
 def load_file(file):
     file_extension = pathlib.Path(file).suffix
