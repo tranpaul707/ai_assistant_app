@@ -5,6 +5,5 @@ embeddings = OllamaEmbeddings(
 ) 
 
 def embed(chunks):
-    vector = embeddings.embed_query(chunks[0].page_content)
-
-    return vector
+    texts = [c.page_content for c in chunks]
+    return embeddings.embed_documents(texts)
