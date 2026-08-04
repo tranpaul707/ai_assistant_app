@@ -4,16 +4,15 @@ from langchain_community.document_loaders import (
     TextLoader,
     Docx2txtLoader,
 )
-import asyncio
 
 def load_file(file):
     file_extension = pathlib.Path(file).suffix
 
     if file_extension == ".txt":
-        loader = PyPDFLoader(file)
+        loader = TextLoader(file)
 
     elif file_extension == ".pdf":
-        loader = TextLoader(file)
+        loader = PyPDFLoader(file)
 
     elif file_extension == ".docx":
         loader = Docx2txtLoader(file)

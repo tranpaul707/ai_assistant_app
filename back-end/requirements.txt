@@ -5,3 +5,4 @@ langchain-ollama>=0.3
 langchain-community
 pypdf
 docx2txt
+tiktoken
