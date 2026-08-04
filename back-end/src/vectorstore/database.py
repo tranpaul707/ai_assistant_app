@@ -6,4 +6,3 @@ vector_store = Chroma(
     embedding_function=embeddings,
     persist_directory="chroma_db",
 )
-
