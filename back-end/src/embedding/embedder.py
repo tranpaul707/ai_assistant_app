@@ -1,3 +1,5 @@
+# Unused
+
 from langchain_ollama import OllamaEmbeddings
 
 embeddings = OllamaEmbeddings(
@@ -7,3 +9,4 @@ embeddings = OllamaEmbeddings(
 def embed(chunks):
     texts = [c.page_content for c in chunks]
     return embeddings.embed_documents(texts)
+
