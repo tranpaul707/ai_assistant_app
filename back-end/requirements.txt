@@ -6,3 +6,4 @@ langchain-community
 pypdf
 docx2txt
 tiktoken
+langchain-chroma>=0.1.2
