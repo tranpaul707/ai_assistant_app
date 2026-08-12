@@ -18,14 +18,19 @@ const App = () => {
           {/* Chat Body */}
           <div className="chat-body">
             <div className="chat-window">
-              <div className="chat-bot-message"> 
-                
+              <div className="chat-bot-message">
+                hi
+              </div>
+
+              <div className="chat-human-message"> 
+                hi
               </div>
             </div>
           </div>
 
           <div className="chat-footer">
-            <input className="message" type="text" placeholder="Your Message.."/>
+            <input className="message" type="text" placeholder="Your Message.." id="chat-input"/>
+            <button type="submit" id="submit-input"> Submit </button>
           </div>
 
 
