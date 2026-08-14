@@ -1,6 +1,14 @@
 import AssistantIcon from './components/AssistantIcon.tsx';
+import { useState } from "react";
+import Message from './components/Message.tsx';
+import type { MessageData } from "./components/Message.tsx";
 
 const App = () => {
+
+  const [messages, setMessages] = useState<MessageData[]> ([
+    {id: 1, content: "Hello", role: "user"}
+  ]);
+
   return (
     <div className = "container">
       <div className = "chat-pop-up">
@@ -18,13 +26,13 @@ const App = () => {
           {/* Chat Body */}
           <div className="chat-body">
             <div className="chat-window">
-              <div className="chat-bot-message">
-                hi
-              </div>
-
-              <div className="chat-human-message"> 
-                hi
-              </div>
+              {messages.map(message => (
+                <Message 
+                  key={message.id}
+                  message={message}
+                  isLoading={false}
+                  />
+              ))};
             </div>
           </div>
 
