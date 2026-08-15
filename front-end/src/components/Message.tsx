@@ -15,7 +15,7 @@ const Message = ({ message, isLoading }: MessageProps) => {
 
   return (
     <div className={className}>
-      {isLoading ? <p>AI is thinking</p> : <p>{message.content}</p>}
+      {isLoading ? <p> AI is thinking</p> : <p>{message.content}</p>}
     </div>
   );
 };
