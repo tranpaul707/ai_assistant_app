@@ -12,7 +12,7 @@ def handle_query(query, context=None):
         ("human", "{question}"),
     ])
 
-    prompt = template.invoke({"question": "What is React?", "context": context or ""})
+    prompt = template.invoke({"question": query, "context": context or ""})
 
 
     for chunk in llm.stream(prompt):

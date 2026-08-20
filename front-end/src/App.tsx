@@ -1,88 +1,82 @@
 import AssistantIcon from "./components/AssistantIcon.tsx";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Message from "./components/Message.tsx";
 import type { MessageData } from "./components/Message.tsx";
 
 const App = () => {
-  const [messages, setMessages] = useState<MessageData[]>([
-    {
-      id: 1,
-      content:
-        "Hello World Hello WorlddHello WorlddHello Worldd Hello WorlddHello WorlddHello WorlddHello Worldd",
-      role: "assistant",
-    },
-    {
-      id: 2,
-      content:
-        "Hello World Hello WorlddHello WorlddHello Worldd Hello WorlddHello WorlddHello WorlddHello Worldd",
-      role: "user",
-    },
-    { id: 3, content: "Hello Biatch", role: "assistant" },
-    { id: 4, content: "Hey! How can I help you today?", role: "user" },
-    {
-      id: 5,
-      content:
-        "I'm working on a React chat interface and trying to understand how message history should work.",
-      role: "assistant",
-    },
-    {
-      id: 6,
-      content:
-        "That sounds like a great project. Are you storing the messages in useState?",
-      role: "user",
-    },
-    {
-      id: 7,
-      content:
-        "Yes, I'm using a MessageData[] array to keep track of the conversation.",
-      role: "assistant",
-    },
-    {
-      id: 8,
-      content:
-        "Nice. That makes it easy to add new messages and pass the list to your MessageList component.",
-      role: "user",
-    },
-    {
-      id: 9,
-      content:
-        "So whenever I call setMessages, React should automatically update the UI?",
-      role: "assistant",
-    },
-    {
-      id: 10,
-      content:
-        "Exactly. React will re-render the components that depend on the updated state.",
-      role: "user",
-    },
-    {
-      id: 11,
-      content:
-        "And each message should have a unique id so I can use it as the key when rendering the list.",
-      role: "assistant",
-    },
-    {
-      id: 12,
-      content:
-        "Correct. Using message.id as the key helps React keep track of each message between renders.",
-      role: "user",
-    },
-    {
-      id: 13,
-      content:
-        "Got it. I think I'm starting to understand how the pieces fit together.",
-      role: "assistant",
-    },
-  ]);
+  const [messages, setMessages] = useState<MessageData[]>([]);
+  const [txt, setTxt] = useState("");
+  const nextId = useRef(0);
 
-  const [input, setInput] = useState("")
-  const [txt, setTxt] = useState("")
+  async function sendMessage(message: string) {
+    const assistantMessageId = nextId.current++;
+
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantMessageId, content: "", role: "assistant", isLoading: true },
+    ]);
+
+    const response = await fetch("http://127.0.0.1:8000/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: message,
+      }),
+    });
+
+    const reader = response.body?.getReader();
+    if (!reader) return;
+
+    const decoder = new TextDecoder();
+
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = buffer.split("\n\n");
+
+      buffer = events.pop() ?? "";
+
+      for (const event of events) {
+        const dataLine = event
+          .split("\n")
+          .find((line) => line.startsWith("data:"));
+
+        if (!dataLine) continue;
+
+        const data = dataLine.slice(5)
+
+        let text = JSON.parse(data)
+
+        setMessages(prev => 
+          prev.map(message => 
+            message.id === assistantMessageId && message.role === "assistant" ?
+            {...message, content: message.content + text, isLoading: false} 
+            : message))
+      }
+
+
+    }
+  }
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-    setInput(txt)
-    setTxt("")
     event.preventDefault()
-    console.log("Submitted")
+    const currentMessage = txt.trim();
+    if (!currentMessage) return;
+
+    setMessages([...messages, {id: nextId.current++, content: currentMessage, role: "user"}])
+
+    sendMessage(currentMessage);
+    setTxt("");
   }
 
   return (
@@ -100,7 +94,7 @@ const App = () => {
         <div className="chat-body">
           <div className="chat-window">
             {messages.map((message) => (
-              <Message key={message.id} message={message} isLoading={false} />
+              <Message key={message.id} message={message} />
             ))}
           </div>
         </div>

@@ -29,12 +29,3 @@ def rag_pipeline(query):
         response = handle_query(query, documents)
 
     return response
-
-
-if __name__ == "__main__":
-#    results = vector_store.get()
-#    print(results.keys())          # often: documents, metadatas, ids, embeddings?
-#    print(len(results["ids"]))
-#    print(results["ids"][:5])      # first few ids
-#    print(results["documents"][:2])  # first chunk texts
-    pass
