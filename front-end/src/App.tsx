@@ -108,10 +108,13 @@ const App = () => {
               value={txt}
               onChange={(e) => setTxt(e.target.value)}
               />
-
+            
+            <input type="file" id="file-input"/>
+            
             <button type="submit" id="submit-input">
               Submit
             </button>
+
           </form>
         </div>
       </div>

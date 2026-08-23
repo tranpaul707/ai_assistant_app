@@ -1,7 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 from llm.client import llm
 
-def handle_query(query, context=None):
+def handle_query(query: str, context=None):
     template = ChatPromptTemplate.from_messages([
         ("system",
          "You are a kind AI assistant who enjoys responding in a helpful tone. "
@@ -16,4 +16,5 @@ def handle_query(query, context=None):
 
 
     for chunk in llm.stream(prompt):
-        yield chunk
+        if chunk.content:
+            yield chunk.content

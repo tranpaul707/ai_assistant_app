@@ -1,5 +1,7 @@
 fastapi
+python-multipart
 uvicorn
+langchain>=1.0
 langchain-core
 langchain-ollama>=0.3
 langchain-community
@@ -7,3 +9,5 @@ pypdf
 docx2txt
 tiktoken
 langchain-chroma>=0.1.2
+langgraph-checkpoint-redis
+redis

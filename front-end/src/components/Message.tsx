@@ -14,7 +14,7 @@ const Message = ({ message }: MessageProps) => {
     message.role === "user" ? "chat-human-message" : "chat-bot-message";
 
   return (
-    <div className={className}>
+    <div className={className} style={{whiteSpace: "pre-wrap"}}>
       {message.isLoading ? <p>AI is waiting...</p> : <p>{message.content}</p>}
     </div>
   );
