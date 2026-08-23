@@ -20,21 +20,15 @@ def format_response(result: dict) -> str:
     return "\n".join(lines)
 
 
-def lang_graph_redis_short_term(query: str):
+def stream_agent(query: str, thread_id: str = "user123"):
     REDIS_URI = "redis://localhost:6379"
     with RedisSaver.from_conn_string(REDIS_URI) as checkpointer:
         checkpointer.setup()
 
         graph = create_agent(model=llm, checkpointer=checkpointer)
 
-        config: RunnableConfig = {"configurable": {"thread_id": "user123"}}
-        res = graph.invoke(
-            {"messages": [HumanMessage(query)]},
-            config, stream_mode="values",
-        )
-
-        ai_message = res["messages"][-1]
-
-        print(ai_message.content)
-
-lang_graph_redis_short_term("Who was known to be the tallest person in histrory?")
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+        
+        for token, _metadata in graph.stream({"messages": [HumanMessage(query)]}, config=config, stream_mode="messages"):
+            if isinstance(token, AIMessage) and token.content:
+                yield str(token.content)
