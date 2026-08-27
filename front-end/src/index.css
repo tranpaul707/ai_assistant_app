@@ -1,8 +1,22 @@
+:root {
+  --page: #d8d4ce;
+  --surface: #f4f2ee;
+  --text: #1a1816;
+  --muted: #6b6560;
+  --accent: #9a5b2f;
+  --user-bubble: #e6dfd6;
+  --assistant-bubble: #ffffff;
+  --border: #cfc7bd;
+  --shadow: rgba(26, 24, 22, 0.16);
+  --text-h: var(--accent);
+}
+
 body {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(rgb(205, 109, 237), white);
+  background: var(--page);
+  color: var(--text);
   min-height: 100vh;
 }

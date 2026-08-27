@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -5,7 +6,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
-from assistant.agent import get_agent, get_private_agent, is_answer_token
+from assistant.agent import create_general_agent, create_private_agent, is_answer_token
 from llm.client import llm
 from memory.checkpointer import get_checkpointer, thread_config
 
@@ -19,11 +20,8 @@ class RouteDecision(BaseModel):
     route: Literal["general", "private"]
 
 
-router_llm = llm.with_structured_output(RouteDecision)
-
-
 def classify(query: str) -> Literal["general", "private"]:
-    decision = router_llm.invoke(
+    decision = llm.with_structured_output(RouteDecision).invoke(
         [
             {
                 "role": "system",
@@ -73,11 +71,12 @@ def route_request(state: GraphState) -> Literal["general", "private"]:
     return state["route"] or "general"
 
 
-def build_graph():
+@lru_cache(maxsize=1)
+def get_graph():
     builder = StateGraph(GraphState)
     builder.add_node("classifier", classifier_node)
-    builder.add_node("general", get_agent())
-    builder.add_node("private", get_private_agent())
+    builder.add_node("general", create_general_agent())
+    builder.add_node("private", create_private_agent())
 
     builder.add_edge(START, "classifier")
     builder.add_conditional_edges(
@@ -94,14 +93,11 @@ def build_graph():
     return builder.compile(checkpointer=get_checkpointer())
 
 
-graph = build_graph()
-
-
 def stream_routed(query: str, thread_id: str = "user123"):
     """Run the parent graph and yield assistant answer tokens for SSE."""
     config = thread_config(thread_id)
 
-    for namespace, chunk in graph.stream(
+    for namespace, chunk in get_graph().stream(
         {"messages": [HumanMessage(query)], "route": None},
         config=config,
         stream_mode="messages",

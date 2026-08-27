@@ -1,9 +1,12 @@
+from functools import lru_cache
+
 from langchain.agents import create_agent
 from langchain.agents.middleware import wrap_tool_call
 from langchain_core.messages import AIMessageChunk
 
 from llm.client import llm
 from tools.rag import search_private_knowledge
+
 
 @wrap_tool_call
 def log_tool_calls(request, handler):
@@ -25,32 +28,23 @@ Guidelines:
 - Stay on topic and refuse requests that are clearly harmful or out of scope for a knowledge assistant.
 """
 
-_general_agent = None
-_private_agent = None
 
-
-def get_agent():
+def create_general_agent():
     """General agent subgraph (no private-knowledge tools)."""
-    global _general_agent
-    if _general_agent is None:
-        _general_agent = create_agent(
-            model=llm,
-            system_prompt=SYSTEM_PROMPT,
-        )
-    return _general_agent
+    return create_agent(
+        model=llm,
+        system_prompt=SYSTEM_PROMPT,
+    )
 
 
-def get_private_agent():
+def create_private_agent():
     """Private-knowledge agent subgraph."""
-    global _private_agent
-    if _private_agent is None:
-        _private_agent = create_agent(
-            model=llm,
-            tools=[search_private_knowledge],
-            system_prompt=SYSTEM_PROMPT,
-            middleware=[log_tool_calls],
-        )
-    return _private_agent
+    return create_agent(
+        model=llm,
+        tools=[search_private_knowledge],
+        system_prompt=SYSTEM_PROMPT,
+        middleware=[log_tool_calls],
+    )
 
 
 def is_answer_token(token) -> bool:

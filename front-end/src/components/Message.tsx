@@ -15,7 +15,7 @@ const Message = ({ message }: MessageProps) => {
 
   return (
     <div className={className} style={{whiteSpace: "pre-wrap"}}>
-      {message.isLoading ? <p>AI is waiting...</p> : <p>{message.content}</p>}
+      {message.isLoading ? <p>AI is thinking...</p> : <p>{message.content}</p>}
     </div>
   );
 };
