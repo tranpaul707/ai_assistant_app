@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel
 
-from assistant.agent import stream_agent
+from assistant.graph import stream_routed
 
 router = APIRouter()
 
@@ -14,6 +14,6 @@ class ChatRequest(BaseModel):
 
 @router.post("/chat", response_class=EventSourceResponse)
 def stream_chat(request: ChatRequest):
-    for chunk in stream_agent(request.message, request.thread_id):
+    for chunk in stream_routed(request.message, request.thread_id):
         yield ServerSentEvent(data=chunk, event="token")
     yield ServerSentEvent(raw_data="[DONE]", event="done")

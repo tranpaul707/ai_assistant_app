@@ -1,18 +1,17 @@
+from functools import lru_cache
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.redis import RedisSaver
 
 REDIS_URI = "redis://localhost:6379"
 
-_checkpointer: RedisSaver | None = None
 
-
+@lru_cache(maxsize=1)
 def get_checkpointer() -> RedisSaver:
-    """Return a process-wide Redis checkpointer (created once)."""
-    global _checkpointer
-    if _checkpointer is None:
-        _checkpointer = RedisSaver(redis_url=REDIS_URI)
-        _checkpointer.setup()
-    return _checkpointer
+    """Return a shared Redis checkpointer for this process."""
+    checkpointer = RedisSaver(redis_url=REDIS_URI)
+    checkpointer.setup()
+    return checkpointer
 
 
 def thread_config(thread_id: str) -> RunnableConfig:

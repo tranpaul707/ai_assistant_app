@@ -17,6 +17,7 @@ def search_private_knowledge(query: str) -> str:
     Do NOT call this for greetings, chit-chat, general knowledge, coding help,
     opinions, or anything answerable without the documents.
     """
+
     docs = load_file("file.txt")
     chunks = chunk_text(docs)
 
