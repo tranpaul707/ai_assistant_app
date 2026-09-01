@@ -5,19 +5,18 @@ from langchain_community.document_loaders import (
     Docx2txtLoader,
 )
 
-def load_file(file):
-    file_extension = pathlib.Path(file).suffix
+def load_file(file, file_name: str):
 
-    if file_extension == ".txt":
+    if file_name.endswith(".txt"):
         loader = TextLoader(file)
 
-    elif file_extension == ".pdf":
+    elif file_name.endswith(".pdf"):
         loader = PyPDFLoader(file)
 
-    elif file_extension == ".docx":
+    elif file_name.endswith(".docx"):
         loader = Docx2txtLoader(file)
 
     else:
-        raise ValueError(f"Unsupported file type: {file_extension}")
+        raise ValueError(f"Unsupported file type: {file_name}")
 
     return loader.load()
