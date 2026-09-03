@@ -1,23 +1,25 @@
 from pathlib import Path
-from io import BytesIO
-from fastapi import APIRouter, File, UploadFile
-import io
-from pypdf import PdfReader
 
+from fastapi import APIRouter, File, HTTPException, UploadFile
+
+from documents.document import load_file
+
+from ingestion.ingest_file import ingest
 router = APIRouter()
 
-UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent
+UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-   data = await file.read()
-   buffer = io.BytesIO(data)
-   pdf_text = PdfReader(buffer)
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
 
-   for page in pdf_text.pages:
-    print(page.extract_text())
+    safe_name = Path(file.filename).name
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest = UPLOAD_DIR / safe_name
+    dest.write_bytes(await file.read())
 
+    documents = load_file(str(dest), safe_name)
 
-
-   
+    ingest(documents, safe_name)
