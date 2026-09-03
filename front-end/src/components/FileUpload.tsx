@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ChangeEvent } from "react";
 
 type UploadStatus = "idle" | "uploading" | "success" | "error"
@@ -6,6 +6,13 @@ type UploadStatus = "idle" | "uploading" | "success" | "error"
 const FileUpload = () => {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<UploadStatus>("idle")
+
+  useEffect(() => {
+    if (status !== "success" && status !== "error") return;
+
+    const timeoutId = setTimeout(() => setStatus("idle"), 3000);
+    return () => clearTimeout(timeoutId);
+  }, [status]);
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0] ?? null;
@@ -29,8 +36,7 @@ const FileUpload = () => {
                 body: formData
             });
 
-
-            console.log(response);
+            if (!response.ok) throw new Error("Upload failed")
             setStatus('success')
         }
 

@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from documents.document import load_file
 
+from ingestion.ingest_file import ingest
 router = APIRouter()
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
@@ -21,7 +22,4 @@ async def upload_file(file: UploadFile = File(...)):
 
     documents = load_file(str(dest), safe_name)
 
-    return {
-        "filename": safe_name,
-        "documents": len(documents),
-    }
+    ingest(documents, safe_name)
