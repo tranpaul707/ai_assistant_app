@@ -6,7 +6,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
-from assistant.agent import create_general_agent, create_private_agent, is_answer_token
+from agents.agent import create_general_agent, create_private_agent, is_answer_token
 from llm.client import llm
 from memory.checkpointer import get_checkpointer, thread_config
 

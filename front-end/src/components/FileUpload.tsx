@@ -1,50 +1,39 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { ChangeEvent } from "react";
 
-type UploadStatus = "idle" | "uploading" | "success" | "error"
+type UploadStatus = "idle" | "uploading";
 
 const FileUpload = () => {
   const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<UploadStatus>("idle")
-
-  useEffect(() => {
-    if (status !== "success" && status !== "error") return;
-
-    const timeoutId = setTimeout(() => setStatus("idle"), 3000);
-    return () => clearTimeout(timeoutId);
-  }, [status]);
+  const [status, setStatus] = useState<UploadStatus>("idle");
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0] ?? null;
     setFile(selected);
   }
 
-  async function handleFileUpload(){
-    if (!file){
-        return;
+  async function handleFileUpload() {
+    if (!file) {
+      return;
     }
 
-    else{
-        setStatus("uploading")
-        const formData = new FormData();
-        formData.append('file', file)
+    setStatus("uploading");
+    const formData = new FormData();
+    formData.append("file", file);
 
-        try {
-            const response = await fetch("http://127.0.0.1:8000/upload",
-                {
-                method: 'POST',
-                body: formData
-            });
+    try {
+      const response = await fetch("http://127.0.0.1:8000/upload", {
+        method: "POST",
+        body: formData,
+      });
 
-            if (!response.ok) throw new Error("Upload failed")
-            setStatus('success')
-        }
-
-        catch{
-            setStatus('error')
-        }
+      if (!response.ok) throw new Error("Upload failed");
+      alert("File uploaded successfully");
+    } catch {
+      alert("Error uploading file, try again");
+    } finally {
+      setStatus("idle");
     }
-
   }
 
   return (
@@ -60,9 +49,6 @@ const FileUpload = () => {
           Upload
         </button>
       )}
-      {status === "success" && <p>File uploaded successfully</p>}
-
-      {status === "error" && <p>Error uploading file, try again</p>}
     </div>
   );
 };

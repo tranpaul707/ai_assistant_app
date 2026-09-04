@@ -1,9 +1,13 @@
 from langchain_core.tools import tool
 
-from retrieval.search import retrieve
-from ingestion.ingest_file import ingest
+from knowledge.retrieve import retrieve
 
-@tool("search_private_knowledge", description="Search Vector Database for external knowledge", response_format="content")
+
+@tool(
+    "search_private_knowledge",
+    description="Search Vector Database for external knowledge",
+    response_format="content",
+)
 def search_private_knowledge(query: str) -> str:
     """Search uploaded/stored documents for passages that answer the query.
 

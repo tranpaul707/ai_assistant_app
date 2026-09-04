@@ -1,4 +1,4 @@
-from vectorstore.database import vector_store
+from knowledge.store import vector_store
 
 
 def retrieve(query):
@@ -6,7 +6,4 @@ def retrieve(query):
         search_type="similarity",
         search_kwargs={"k": 4},
     )
-
-    documents = retriever.invoke(query)
-
-    return documents
+    return retriever.invoke(query)
