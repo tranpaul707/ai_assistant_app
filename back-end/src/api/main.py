@@ -9,13 +9,17 @@ from api.routes import chat, upload
 
 app = FastAPI()
 
+# Explicit common Vite origins + regex for any localhost / 127.0.0.1 port
+# (Cursor preview, alternate Vite ports, etc. otherwise get CORS 400 on OPTIONS).
 origins = [
-    "http://localhost:5173"
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
