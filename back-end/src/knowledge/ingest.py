@@ -1,9 +1,9 @@
-from chunking.textsplitter import chunk_text
-from vectorstore.database import vector_store
+from knowledge.chunking import chunk_text
+from knowledge.store import vector_store
 
 
 def ingest(documents, filename: str):
-    """Ingests uploaded file into the vector database for future RAG usage."""
+    """Chunk documents and upsert into Chroma, one copy per filename."""
     chunks = chunk_text(documents)
     for chunk in chunks:
         chunk.metadata["source"] = filename

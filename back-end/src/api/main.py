@@ -1,8 +1,10 @@
-# Run from back-end/src: uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
+# Run from back-end/src:
+#   uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
 from fastapi import FastAPI
-from api.routes import chat, upload
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+
+from api.routes import chat, upload
 
 
 app = FastAPI()

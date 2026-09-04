@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel
 
-from assistant.graph import stream_routed
+from agents.graph import stream_routed
 
 router = APIRouter()
 
