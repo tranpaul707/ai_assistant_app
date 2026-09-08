@@ -3,6 +3,7 @@ import AssistantIcon from "./components/AssistantIcon.tsx";
 import ChatWindow from "./components/ChatWindow.tsx";
 import type { ChatWindowHandle } from "./components/ChatWindow.tsx";
 import FileUpload from "./components/FileUpload.tsx";
+import GoogleSignin from "./components/GoogleSignin.tsx";
 
 const App = () => {
   const [txt, setTxt] = useState("");
@@ -25,6 +26,7 @@ const App = () => {
             <AssistantIcon />
 
             <h2 className="text-info">Knowledge Assistant</h2>
+            <GoogleSignin />
           </div>
         </div>
 
