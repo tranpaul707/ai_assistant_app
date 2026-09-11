@@ -18,5 +18,9 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Session restore / status refresh on mount is intentional in this app.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

@@ -1,0 +1,45 @@
+[MAIN]
+# Lint application packages under back-end/src
+ignore=CVS
+jobs=1
+persistent=yes
+load-plugins=
+suggestion-mode=yes
+fail-under=8.5
+
+[MESSAGES CONTROL]
+# Keep signal high for CI; disable noisy style nits common in FastAPI/LangChain apps.
+disable=
+    raw-checker-failed,
+    bad-inline-option,
+    locally-disabled,
+    file-ignored,
+    suppressed-message,
+    useless-suppression,
+    deprecated-pragma,
+    use-symbolic-message-instead,
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-few-public-methods,
+    too-many-arguments,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-instance-attributes,
+    duplicate-code,
+    import-error,
+    no-name-in-module,
+    too-many-positional-arguments,
+    no-member
+
+[FORMAT]
+max-line-length=100
+
+[DESIGN]
+max-args=12
+
+[REPORTS]
+output-format=text
+reports=no
+score=yes
