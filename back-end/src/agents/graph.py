@@ -6,7 +6,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
-from agents.agent import create_general_agent, create_private_agent, is_answer_token
+from agents.agent import (
+    create_general_agent,
+    create_private_agent,
+    is_answer_token,
+    looks_like_tool_args_json,
+    message_text,
+)
 from llm.client import llm
 from memory.checkpointer import get_checkpointer, thread_config
 
@@ -29,14 +35,15 @@ def classify(query: str) -> Literal["general", "private"]:
                 Classify the user's request into exactly one route.
 
                 private = the user wants information from their uploaded/private documents,
-                knowledge base, stored files, scripts, or anything that must be looked up
-                in personal document storage (including movie scripts or files they mention
-                as uploaded/private).
+                knowledge base, stored files, scripts, Gmail/email mailbox, or anything that
+                must be looked up in personal document or email storage (including movie
+                scripts or files they mention as uploaded/private, and questions like
+                "find the email from…", "did I receive…", "search my emails").
 
                 general = greetings, chit-chat, math, jokes, coding, or anything answerable
-                from general world knowledge without searching private documents.
+                from general world knowledge without searching private documents or email.
 
-                When unsure whether documents are needed, prefer private.
+                When unsure whether documents or email are needed, prefer private.
                 """,
             },
             {
@@ -93,9 +100,31 @@ def get_graph():
     return builder.compile(checkpointer=get_checkpointer())
 
 
-def stream_routed(query: str, thread_id: str = "user123"):
+def stream_routed(
+    query: str,
+    thread_id: str = "user123",
+    *,
+    user_sub: str | None = None,
+):
     """Run the parent graph and yield assistant answer tokens for SSE."""
-    config = thread_config(thread_id)
+    config = thread_config(thread_id, user_sub=user_sub)
+
+    # Local models (e.g. Ollama) often stream tool-call args as plain-text JSON.
+    # Buffer `{...}` spans and drop them when they look like tool parameters.
+    buf: list[str] = []
+    buffering_json = False
+
+    def take_buffer() -> str | None:
+        nonlocal buf, buffering_json
+        if not buf:
+            buffering_json = False
+            return None
+        joined = "".join(buf)
+        buf = []
+        buffering_json = False
+        if looks_like_tool_args_json(joined):
+            return None
+        return joined
 
     for namespace, chunk in get_graph().stream(
         {"messages": [HumanMessage(query)], "route": None},
@@ -108,5 +137,46 @@ def stream_routed(query: str, thread_id: str = "user123"):
             continue
 
         token = chunk[0] if isinstance(chunk, tuple) else chunk
-        if is_answer_token(token):
-            yield str(getattr(token, "content", ""))
+
+        if getattr(token, "tool_call_chunks", None) or getattr(token, "tool_calls", None):
+            leftover = take_buffer()
+            if leftover:
+                yield leftover
+            continue
+
+        text = message_text(getattr(token, "content", ""))
+        if not text:
+            continue
+
+        if buffering_json:
+            buf.append(text)
+            joined = "".join(buf)
+            stripped = joined.strip()
+            if stripped.startswith("{") and not stripped.endswith("}"):
+                continue
+            leftover = take_buffer()
+            if leftover:
+                yield leftover
+            continue
+
+        if text.lstrip().startswith("{"):
+            buffering_json = True
+            buf = [text]
+            stripped = text.strip()
+            if stripped.endswith("}"):
+                leftover = take_buffer()
+                if leftover:
+                    yield leftover
+            continue
+
+        if looks_like_tool_args_json(text):
+            continue
+
+        if not is_answer_token(token):
+            continue
+
+        yield text
+
+    leftover = take_buffer()
+    if leftover:
+        yield leftover

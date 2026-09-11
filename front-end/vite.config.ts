@@ -10,4 +10,9 @@ export default defineConfig({
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss()
   ],
+  // Keep a stable origin so it matches Google Cloud "Authorized JavaScript origins".
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
 })

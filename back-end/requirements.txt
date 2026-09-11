@@ -1,6 +1,7 @@
 fastapi
 python-multipart
 uvicorn
+python-dotenv
 langchain>=1.0
 langchain-core
 langchain-ollama>=0.3
@@ -11,3 +12,8 @@ tiktoken
 langchain-chroma>=0.1.2
 langgraph-checkpoint-redis
 redis
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+pytest

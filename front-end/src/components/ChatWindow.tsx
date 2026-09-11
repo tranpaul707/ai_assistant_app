@@ -1,91 +1,117 @@
-import { useState, useRef, useImperativeHandle, forwardRef } from "react";
+import { useState, useRef, useImperativeHandle, forwardRef, useEffect } from "react";
 import Message from "./Message.tsx";
 import type { MessageData } from "./Message.tsx";
+import { API_BASE, authHeaders } from "../api/client";
 
 export interface ChatWindowHandle {
   sendMessage: (message: string) => void;
+  clearMessages: () => void;
+  loadMessages: (messages: MessageData[]) => void;
 }
 
-const ChatWindow = forwardRef<ChatWindowHandle>(function ChatWindow(_, ref) {
-  const [messages, setMessages] = useState<MessageData[]>([]);
-  const nextId = useRef(0);
+interface ChatWindowProps {
+  threadId: string;
+}
 
-  async function streamAssistantReply(userMessage: string) {
-    const assistantMessageId = nextId.current++;
+const ChatWindow = forwardRef<ChatWindowHandle, ChatWindowProps>(
+  function ChatWindow({ threadId }, ref) {
+    const [messages, setMessages] = useState<MessageData[]>([]);
+    const nextId = useRef(0);
+    const threadIdRef = useRef(threadId);
 
-    setMessages((prev) => [
-      ...prev,
-      { id: assistantMessageId, content: "", role: "assistant", isLoading: true },
-    ]);
+    useEffect(() => {
+      threadIdRef.current = threadId;
+    }, [threadId]);
 
-    const response = await fetch("http://127.0.0.1:8000/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: userMessage,
-      }),
-    });
+    async function streamAssistantReply(userMessage: string) {
+      const assistantMessageId = nextId.current++;
 
-    const reader = response.body?.getReader();
-    if (!reader) return;
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantMessageId, content: "", role: "assistant", isLoading: true },
+      ]);
 
-    const decoder = new TextDecoder();
-    let buffer = "";
+      const response = await fetch(`${API_BASE}/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(),
+        },
+        body: JSON.stringify({
+          message: userMessage,
+          thread_id: threadIdRef.current,
+        }),
+      });
 
-    while (true) {
-      const { done, value } = await reader.read();
+      const reader = response.body?.getReader();
+      if (!reader) return;
 
-      if (done) {
-        break;
-      }
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const { done, value } = await reader.read();
 
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
+        if (done) {
+          break;
+        }
 
-      for (const event of events) {
-        const dataLine = event
-          .split("\n")
-          .find((line) => line.startsWith("data:"));
+        buffer += decoder.decode(value, { stream: true });
 
-        if (!dataLine) continue;
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
 
-        const data = dataLine.slice(5);
-        const text = JSON.parse(data);
+        for (const event of events) {
+          const dataLine = event
+            .split("\n")
+            .find((line) => line.startsWith("data:"));
 
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === assistantMessageId && message.role === "assistant"
-              ? { ...message, content: message.content + text, isLoading: false }
-              : message
-          )
-        );
+          if (!dataLine) continue;
+
+          const data = dataLine.slice(5);
+          const text = JSON.parse(data);
+
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === assistantMessageId && message.role === "assistant"
+                ? { ...message, content: message.content + text, isLoading: false }
+                : message
+            )
+          );
+        }
       }
     }
-  }
 
-  function sendMessage(message: string) {
-    setMessages((prev) => [
-      ...prev,
-      { id: nextId.current++, content: message, role: "user" },
-    ]);
-    streamAssistantReply(message);
-  }
+    function sendMessage(message: string) {
+      setMessages((prev) => [
+        ...prev,
+        { id: nextId.current++, content: message, role: "user" },
+      ]);
+      streamAssistantReply(message);
+    }
 
-  useImperativeHandle(ref, () => ({ sendMessage }));
+    useImperativeHandle(ref, () => ({
+      sendMessage,
+      clearMessages: () => {
+        setMessages([]);
+        nextId.current = 0;
+      },
+      loadMessages: (next) => {
+        setMessages(next);
+        nextId.current = next.reduce((max, m) => Math.max(max, m.id + 1), 0);
+      },
+    }));
 
-  return (
-    <div className="chat-body">
-      <div className="chat-window">
-        {messages.map((message) => (
-          <Message key={message.id} message={message} />
-        ))}
+    return (
+      <div className="chat-body">
+        <div className="chat-window">
+          {messages.map((message) => (
+            <Message key={message.id} message={message} />
+          ))}
+        </div>
       </div>
-    </div>
-  );
-});
+    );
+  }
+);
 
 export default ChatWindow;
