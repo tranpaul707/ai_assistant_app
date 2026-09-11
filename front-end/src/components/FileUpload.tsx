@@ -1,23 +1,31 @@
-import { useState } from "react";
+import { useRef } from "react";
 import type { ChangeEvent } from "react";
 
 type UploadStatus = "idle" | "uploading";
 
-const FileUpload = () => {
-  const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<UploadStatus>("idle");
+interface FileUploadProps {
+  file: File | null;
+  status: UploadStatus;
+  onFileChange: (file: File | null) => void;
+  onStatusChange: (status: UploadStatus) => void;
+}
+
+const FileUpload = ({
+  file,
+  status,
+  onFileChange,
+  onStatusChange,
+}: FileUploadProps) => {
+  const inputRef = useRef<HTMLInputElement>(null);
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    const selected = e.target.files?.[0] ?? null;
-    setFile(selected);
+    onFileChange(e.target.files?.[0] ?? null);
   }
 
   async function handleFileUpload() {
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
-    setStatus("uploading");
+    onStatusChange("uploading");
     const formData = new FormData();
     formData.append("file", file);
 
@@ -29,23 +37,25 @@ const FileUpload = () => {
 
       if (!response.ok) throw new Error("Upload failed");
       alert("File uploaded successfully");
+      onFileChange(null);
+      if (inputRef.current) inputRef.current.value = "";
     } catch {
       alert("Error uploading file, try again");
     } finally {
-      setStatus("idle");
+      onStatusChange("idle");
     }
   }
 
   return (
     <div className="file-upload">
-      <input type="file" id="file-input" onChange={handleFileChange} />
-      <p className="file-status">
-        {file
-          ? `Selected: ${file.name.length > 12 ? `${file.name.slice(0, 12)}…` : file.name}`
-          : "No file selected"}
-      </p>
+      <input
+        ref={inputRef}
+        type="file"
+        id="file-input"
+        onChange={handleFileChange}
+      />
       {file && status !== "uploading" && (
-        <button type="button" className="upload-button" onClick={handleFileUpload}>
+        <button type="button" className="upload-button" onClick={() => void handleFileUpload()}>
           Upload
         </button>
       )}
@@ -53,4 +63,5 @@ const FileUpload = () => {
   );
 };
 
+export type { UploadStatus };
 export default FileUpload;
