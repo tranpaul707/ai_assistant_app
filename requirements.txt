@@ -1,5 +1,0 @@
-fastapi
-uvicorn
-langchain-core
-langchain-ollama>=0.3
-langchain-docling

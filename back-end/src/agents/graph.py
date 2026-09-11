@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from agents.agent import (
 )
 from llm.client import llm
 from memory.checkpointer import get_checkpointer, thread_config
+from memory.manager import memory_manager
 
 
 class GraphState(TypedDict):
@@ -109,10 +110,17 @@ def stream_routed(
     """Run the parent graph and yield assistant answer tokens for SSE."""
     config = thread_config(thread_id, user_sub=user_sub)
 
+    memory_block, _ = memory_manager.context_for_turn(user_sub, query=query)
+    turn_messages: list[BaseMessage] = []
+    if memory_block:
+        turn_messages.append(SystemMessage(content=memory_block))
+    turn_messages.append(HumanMessage(query))
+
     # Local models (e.g. Ollama) often stream tool-call args as plain-text JSON.
     # Buffer `{...}` spans and drop them when they look like tool parameters.
     buf: list[str] = []
     buffering_json = False
+    assistant_parts: list[str] = []
 
     def take_buffer() -> str | None:
         nonlocal buf, buffering_json
@@ -127,7 +135,7 @@ def stream_routed(
         return joined
 
     for namespace, chunk in get_graph().stream(
-        {"messages": [HumanMessage(query)], "route": None},
+        {"messages": turn_messages, "route": None},
         config=config,
         stream_mode="messages",
         subgraphs=True,
@@ -141,6 +149,7 @@ def stream_routed(
         if getattr(token, "tool_call_chunks", None) or getattr(token, "tool_calls", None):
             leftover = take_buffer()
             if leftover:
+                assistant_parts.append(leftover)
                 yield leftover
             continue
 
@@ -156,6 +165,7 @@ def stream_routed(
                 continue
             leftover = take_buffer()
             if leftover:
+                assistant_parts.append(leftover)
                 yield leftover
             continue
 
@@ -166,6 +176,7 @@ def stream_routed(
             if stripped.endswith("}"):
                 leftover = take_buffer()
                 if leftover:
+                    assistant_parts.append(leftover)
                     yield leftover
             continue
 
@@ -175,8 +186,20 @@ def stream_routed(
         if not is_answer_token(token):
             continue
 
+        assistant_parts.append(text)
         yield text
 
     leftover = take_buffer()
     if leftover:
+        assistant_parts.append(leftover)
         yield leftover
+
+    # Memory manager decides what is worth keeping (Redis LTM — not Chroma).
+    try:
+        memory_manager.ingest_turn(
+            user_sub,
+            user_message=query,
+            assistant_message="".join(assistant_parts),
+        )
+    except Exception:
+        pass
