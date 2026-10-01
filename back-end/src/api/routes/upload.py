@@ -29,4 +29,8 @@ async def upload_file(file: UploadFile = File(...)):
     dest.write_bytes(await file.read())
 
     documents = load_file(str(dest), safe_name)
-    ingest(documents, safe_name)
+    for document in documents:
+        document.metadata["filename"] = safe_name
+        document.metadata["source_type"] = "upload"
+    ingest(documents, safe_name, source_type="upload")
+    return {"status": "ok", "filename": safe_name, "chunks_ready": True}

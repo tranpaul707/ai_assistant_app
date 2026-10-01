@@ -354,8 +354,21 @@
     border-radius: 50px;
     background-color: var(--accent);
     color: var(--surface);
-    border: none;
+    border: 2px solid transparent;
     cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+#submit-input:hover {
+    background-color: #7a4725;
+}
+
+#submit-input:active,
+#submit-input.submit-input--pressed {
+    background-color: #5c3419;
+    border-color: #3f2412;
+    box-shadow: 0 0 0 3px rgba(154, 91, 47, 0.35);
+    transform: scale(0.97);
 }
 
 .file-upload {

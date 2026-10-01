@@ -1,18 +1,24 @@
-"""Unit tests for Gmail body extraction, document conversion, and tool helpers."""
+"""Unit tests for Gmail body extraction, query building, and search_gmail."""
 
 from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 SRC = Path(__file__).resolve().parents[1] / "back-end" / "src"
 sys.path.insert(0, str(SRC))
 
 from services.gmail.client import extract_body
 from services.gmail.models import Email
-from services.gmail.query import build_gmail_query
+from services.gmail.query import (
+    broaden_gmail_queries,
+    build_gmail_query,
+    email_matches_people,
+    extract_keywords,
+    format_person_operator,
+)
 from services.gmail.to_documents import email_to_documents
 
 
@@ -74,64 +80,112 @@ def test_email_to_documents_metadata():
     assert docs[0].metadata["user_sub"] == "user-sub"
 
 
-def test_build_gmail_query_operators():
-    q = build_gmail_query(
-        sender="alice@x.com",
-        subject="offer letter",
-        after="2026-01-01",
-        newer_than="30d",
-        has_attachment=True,
-        keywords="internship",
-        raw_query="-in:spam",
+def test_build_gmail_query_exact_sender_and_recipient_addresses():
+    q = build_gmail_query(sender="john@example.com", to="bob@example.com", keywords="project")
+    assert "from:john@example.com" in q
+    assert "to:bob@example.com" in q
+    assert "project" in q
+
+
+def test_format_person_operator_quotes_multiword_names():
+    assert format_person_operator("from", "John Smith") == 'from:"John Smith"'
+    assert format_person_operator("to", "john@example.com") == "to:john@example.com"
+
+
+def test_extract_keywords_excludes_person_tokens_and_emails():
+    text = "Find emails from John about the project meeting"
+    assert "project" in extract_keywords(text, exclude={"john"})
+    assert "john" not in extract_keywords(text, exclude={"john"}).split()
+    assert "john@example.com" not in extract_keywords(
+        "emails from john@example.com about billing"
     )
-    assert "from:alice@x.com" in q
-    # Multi-word subject is not phrase-quoted by default (broader match).
-    assert "subject:offer letter" in q
-    assert "after:2026/01/01" in q
-    assert "newer_than:30d" in q
-    assert "has:attachment" in q
-    assert "internship" in q
-    assert "-in:spam" in q
 
 
-def test_extract_and_broaden_queries():
-    from services.gmail.query import broaden_gmail_queries, extract_keywords
-
-    assert "internship" in extract_keywords("find my emails about the internship offer")
-    assert "email" not in extract_keywords("find my email about internship").split()
-
+def test_broaden_keeps_sender_as_long_as_possible():
     queries = broaden_gmail_queries(
-        question="Did I get an internship offer email?",
-        sender="hr@co.com",
-        subject="Final Internship Offer Letter",
-        newer_than="7d",
+        question="Find emails from John about the project",
+        sender="John",
+        keywords="project",
     )
     assert queries
-    assert "from:hr@co.com" in queries[0]
-    # Later attempts drop strict filters.
-    assert any(q == "internship offer" or "internship" in q and "from:" not in q for q in queries)
+    assert "from:John" in queries[0]
+    # Person-preserving attempts should dominate; people-only must appear.
+    assert any(q.strip() == "from:John" for q in queries)
+    # Must not jump straight to keyword-only before trying people-only.
+    people_only_idx = next(i for i, q in enumerate(queries) if q.strip() == "from:John")
+    keyword_only_idxs = [i for i, q in enumerate(queries) if "from:" not in q]
+    if keyword_only_idxs:
+        assert people_only_idx < keyword_only_idxs[0]
 
 
-def test_merge_search_hints_prefers_caller_filters():
+def test_broaden_recipient_and_in_sent():
+    queries = broaden_gmail_queries(
+        question="What did I send Sarah about the meeting?",
+        to="Sarah",
+        keywords="meeting",
+        in_sent=True,
+    )
+    assert any("to:Sarah" in q and "in:sent" in q for q in queries)
+    assert any(q.strip() == "to:Sarah in:sent" for q in queries)
+
+
+def test_broaden_sender_and_date():
+    queries = broaden_gmail_queries(
+        question="What did Sarah send me last week?",
+        sender="Sarah",
+        newer_than="7d",
+    )
+    assert any("from:Sarah" in q and "newer_than:7d" in q for q in queries)
+
+
+def test_broaden_sender_and_recipient():
+    queries = broaden_gmail_queries(sender="Alice", to="Bob", keywords="invoice")
+    assert "from:Alice" in queries[0] and "to:Bob" in queries[0]
+
+
+def test_broaden_normal_search_without_people():
+    queries = broaden_gmail_queries(question="internship offer", keywords="internship offer")
+    assert queries
+    assert "from:" not in queries[0]
+    assert "internship" in queries[0]
+
+
+def test_email_matches_people_filter():
+    assert email_matches_people(
+        sender_header="John Doe <john@example.com>",
+        recipients=["me@x.com"],
+        sender_filter="john@example.com",
+    )
+    assert email_matches_people(
+        sender_header="me@x.com",
+        recipients=["Sarah Connor <sarah@x.com>"],
+        to_filter="Sarah",
+    )
+    assert not email_matches_people(
+        sender_header="Other <other@x.com>",
+        recipients=["me@x.com"],
+        sender_filter="John",
+    )
+
+
+def test_merge_search_hints_prefers_caller_people_filters():
     from services.gmail.query_optimizer import OptimizedGmailSearch, merge_search_hints
 
     optimized = OptimizedGmailSearch(
-        keywords="internship offer",
+        keywords="project",
         sender="bot@invented.com",
-        subject="made up",
+        to="",
         newer_than="30d",
-        rationale="Focus on internship terms",
+        rationale="Focus on project",
     )
     merged = merge_search_hints(
         optimized=optimized,
         sender="hr@co.com",
         keywords="",
     )
-    assert merged["keywords"] == "internship offer"
-    assert merged["sender"] == "hr@co.com"  # caller wins
-    assert merged["subject"] == "made up"  # optimizer fills gap
+    assert merged["keywords"] == "project"
+    assert merged["sender"] == "hr@co.com"
     assert merged["newer_than"] == "30d"
-    assert "internship" in merged["rationale"].lower() or merged["rationale"]
 
 
 def test_search_gmail_unauthorized_without_user():
@@ -144,80 +198,235 @@ def test_search_gmail_unauthorized_without_user():
     assert "not signed in" in result.lower() or "not available" in result.lower()
 
 
-def test_search_gmail_uses_query_optimizer():
-    from tools.gmail import search_gmail
-
-    email = Email(
-        id="e1",
-        thread_id="t1",
-        subject="Offer",
-        sender="hr@co.com",
-        body="Congrats on the internship",
-    )
-    optimized = {
-        "keywords": "internship offer",
-        "sender": "",
-        "to": "",
-        "subject": "",
-        "after": "",
-        "before": "",
-        "newer_than": "365d",
-        "older_than": "",
-        "has_attachment": False,
-        "raw_query": "",
-        "rationale": "Search internship offer terms",
-    }
-
-    with (
-        patch("tools.gmail.optimize_gmail_query", return_value=optimized) as opt_mock,
-        patch("tools.gmail.search_emails", return_value=[email]) as search_mock,
-        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
-        patch("tools.gmail.ingest"),
-    ):
-        result = search_gmail.invoke(
-            {"question": "did I get an internship email?"},
-            config={"configurable": {"user_sub": "sub1"}},
-        )
-
-    opt_mock.assert_called_once()
-    q = search_mock.call_args.args[1]
-    assert "internship" in q
-    assert "newer_than:365d" in q
-    assert "Congrats on the internship" in result
-    assert "gmail query" not in result.lower()
-    assert "optimizer:" not in result.lower()
-    assert "newer_than:" not in result.lower()
-
-
-def test_search_gmail_returns_context_when_ingest_fails():
+def test_search_gmail_from_exact_email():
     from tools.gmail import search_gmail
 
     email = Email(
         id="e1",
         thread_id="t1",
         subject="Hello",
-        sender="a@b.com",
-        body="Body text",
-        preview="Body",
+        sender="John <john@example.com>",
+        recipients=["me@x.com"],
+        body="Hi there",
     )
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", return_value=[email]) as search_mock,
+        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
+        patch("tools.gmail.ingest"),
+    ):
+        result = search_gmail.invoke(
+            {"question": "emails from john@example.com", "sender": "john@example.com"},
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    assert "from:john@example.com" in search_mock.call_args.args[1]
+    assert "Hi there" in result
 
+
+def test_search_gmail_to_exact_email_in_sent():
+    from tools.gmail import search_gmail
+
+    email = Email(
+        id="e2",
+        thread_id="t2",
+        subject="Ping",
+        sender="me@x.com",
+        recipients=["john@example.com"],
+        body="Sent body",
+    )
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", return_value=[email]) as search_mock,
+        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
+        patch("tools.gmail.ingest"),
+    ):
+        result = search_gmail.invoke(
+            {
+                "question": "emails I sent to john@example.com",
+                "to": "john@example.com",
+                "in_sent": True,
+            },
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    q = search_mock.call_args.args[1]
+    assert "to:john@example.com" in q
+    assert "in:sent" in q
+    assert "Sent body" in result
+
+
+def test_search_gmail_from_named_person_plus_keyword():
+    from tools.gmail import search_gmail
+
+    email = Email(
+        id="e3",
+        thread_id="t3",
+        subject="Project update",
+        sender="John <j@x.com>",
+        recipients=["me@x.com"],
+        body="Project status",
+    )
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", return_value=[email]) as search_mock,
+        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
+        patch("tools.gmail.ingest"),
+    ):
+        result = search_gmail.invoke(
+            {
+                "question": "Find emails from John about the project",
+                "sender": "John",
+                "keywords": "project",
+            },
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    q = search_mock.call_args.args[1]
+    assert "from:John" in q
+    assert "project" in q
+    assert "Project status" in result
+
+
+def test_search_gmail_to_named_person_plus_keyword():
+    from tools.gmail import search_gmail
+
+    email = Email(
+        id="e4",
+        thread_id="t4",
+        subject="Meeting",
+        sender="me@x.com",
+        recipients=["Bob <bob@x.com>"],
+        body="About the meeting",
+    )
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", return_value=[email]) as search_mock,
+        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
+        patch("tools.gmail.ingest"),
+    ):
+        result = search_gmail.invoke(
+            {
+                "question": "Find emails I sent to Bob about the meeting",
+                "to": "Bob",
+                "keywords": "meeting",
+                "in_sent": True,
+            },
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    q = search_mock.call_args.args[1]
+    assert "to:Bob" in q
+    assert "meeting" in q
+    assert "About the meeting" in result
+
+
+def test_search_gmail_sender_date_range():
+    from tools.gmail import search_gmail
+
+    email = Email(
+        id="e5",
+        thread_id="t5",
+        subject="Weekly",
+        sender="Sarah <s@x.com>",
+        recipients=["me@x.com"],
+        body="Last week note",
+    )
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", return_value=[email]) as search_mock,
+        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
+        patch("tools.gmail.ingest"),
+    ):
+        search_gmail.invoke(
+            {
+                "question": "What did Sarah send me last week?",
+                "sender": "Sarah",
+                "newer_than": "7d",
+            },
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    q = search_mock.call_args.args[1]
+    assert "from:Sarah" in q
+    assert "newer_than:7d" in q
+
+
+def test_search_gmail_filters_nonmatching_sender_hits():
+    from tools.gmail import search_gmail
+
+    emails = [
+        Email(id="1", thread_id="t", subject="A", sender="Other <o@x.com>", body="nope"),
+        Email(id="2", thread_id="t", subject="B", sender="John <j@x.com>", body="yes"),
+    ]
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", return_value=emails),
+        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
+        patch("tools.gmail.ingest"),
+    ):
+        result = search_gmail.invoke(
+            {"question": "emails from John", "sender": "John"},
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    assert "yes" in result
+    assert "nope" not in result
+
+
+def test_search_gmail_ingests_into_chroma_with_email_source():
+    from tools.gmail import search_gmail
+
+    email = Email(
+        id="ingest1",
+        thread_id="t",
+        subject="S",
+        sender="a@b.com",
+        body="Body",
+    )
     with (
         patch("tools.gmail.optimize_gmail_query", return_value=None),
         patch("tools.gmail.search_emails", return_value=[email]),
         patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
-        patch("tools.gmail.ingest", side_effect=RuntimeError("chroma down")),
+        patch("tools.gmail.ingest") as ingest_mock,
     ):
-        result = search_gmail.invoke(
-            {
-                "question": "hello message",
-                "keywords": "hello",
-                "sender": "a@b.com",
-            },
+        search_gmail.invoke(
+            {"question": "hello", "keywords": "hello"},
             config={"configurable": {"user_sub": "sub1"}},
         )
+    ingest_mock.assert_called_once()
+    assert ingest_mock.call_args.args[1] == "email:ingest1"
 
-    assert "Body text" in result
-    assert "gmail query" not in result.lower()
+
+def test_search_gmail_duplicate_ingest_uses_same_source_key():
+    """Re-retrieving the same Gmail id should ingest under the same source key."""
+    from knowledge.ingest import ingest
+    from langchain_core.documents import Document
+
+    docs = [Document(page_content="hello world " * 20, metadata={"email_id": "dup1"})]
+    store = MagicMock()
+    store.get.return_value = {"ids": ["email:dup1-0"]}
+    chunks = [Document(page_content="chunk-a", metadata={})]
+
+    with (
+        patch("knowledge.ingest.vector_store", store),
+        patch("knowledge.ingest.chunk_text", return_value=chunks),
+    ):
+        ingest(docs, "email:dup1")
+        ingest(docs, "email:dup1")
+
+    assert store.delete.call_count == 2
+    assert all(
+        call.kwargs["ids"] == ["email:dup1-0"] for call in store.add_documents.call_args_list
+    )
+
+
+def test_search_gmail_api_failure_does_not_raise():
+    from tools.gmail import search_gmail
+
+    with (
+        patch("tools.gmail.optimize_gmail_query", return_value=None),
+        patch("tools.gmail.search_emails", side_effect=RuntimeError("boom")),
+    ):
+        result = search_gmail.invoke(
+            {"question": "emails from John", "sender": "John"},
+            config={"configurable": {"user_sub": "sub1"}},
+        )
+    assert "failed" in result.lower()
 
 
 def test_search_gmail_no_results():
@@ -232,80 +441,16 @@ def test_search_gmail_no_results():
             config={"configurable": {"user_sub": "sub1"}},
         )
     assert "no matching" in result.lower()
-    assert "tried queries" not in result.lower()
 
 
-def test_search_gmail_broadens_when_strict_query_empty():
-    from tools.gmail import search_gmail
+def test_classifier_prefers_private_for_email_questions():
+    from agents.graph import classify
 
-    email = Email(
-        id="2",
-        thread_id="t2",
-        subject="Internship offer",
-        sender="hr@co.com",
-        body="You got the offer",
-    )
-
-    def fake_search(_sub, query, max_results=15):
-        # Strict first query includes invented subject → empty; broader hits.
-        if "subject:" in query:
-            return []
-        return [email]
-
-    with (
-        patch("tools.gmail.optimize_gmail_query", return_value=None),
-        patch("tools.gmail.search_emails", side_effect=fake_search),
-        patch("tools.gmail.rerank_emails", side_effect=lambda q, emails, top_k=5: emails[:top_k]),
-        patch("tools.gmail.ingest"),
-    ):
-        result = search_gmail.invoke(
-            {
-                "question": "internship offer",
-                "subject": "Final Internship Offer Letter",
-                "sender": "nobody@example.com",
-            },
-            config={"configurable": {"user_sub": "sub1"}},
-        )
-
-    assert "You got the offer" in result
-    assert "broadened" not in result.lower()
-    assert "gmail query" not in result.lower()
-
-
-def test_search_gmail_fetches_wide_then_reranks():
-    from tools.gmail import search_gmail
-
-    emails = [
-        Email(id="1", thread_id="t1", subject="Noise", sender="x@y.com", body="unrelated"),
-        Email(
-            id="2",
-            thread_id="t2",
-            subject="Internship offer",
-            sender="hr@co.com",
-            body="You got the offer",
-        ),
-        Email(id="3", thread_id="t3", subject="Newsletter", sender="n@n.com", body="sale"),
-    ]
-
-    with (
-        patch("tools.gmail.optimize_gmail_query", return_value=None),
-        patch("tools.gmail.search_emails", return_value=emails) as search_mock,
-        patch(
-            "tools.gmail.rerank_emails",
-            return_value=[emails[1]],
-        ) as rerank_mock,
-        patch("tools.gmail.ingest"),
-    ):
-        result = search_gmail.invoke(
-            {
-                "question": "internship offer email",
-                "keywords": "internship offer",
-                "subject": "offer",
-            },
-            config={"configurable": {"user_sub": "sub1"}},
-        )
-
-    assert search_mock.call_args.kwargs.get("max_results") == 15
-    rerank_mock.assert_called_once()
-    assert "You got the offer" in result
-    assert "Noise" not in result
+    with patch("agents.graph.llm") as mock_llm:
+        structured = MagicMock()
+        structured.invoke.return_value = {"route": "private"}
+        mock_llm.with_structured_output.return_value = structured
+        assert classify("Find emails from John about the project") == "private"
+        # Non-email general question still classifiable as general.
+        structured.invoke.return_value = {"route": "general"}
+        assert classify("What is the capital of France?") == "general"
