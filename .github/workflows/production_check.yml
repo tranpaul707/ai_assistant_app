@@ -1,0 +1,219 @@
+name: production_check
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly Monday at 09:17 UTC; GitHub schedules can be delayed.
+    - cron: "17 9 * * 1"
+  deployment_status:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-check-${{ github.event_name }}-${{ github.ref }}-${{ github.event.deployment.id || '' }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  backend:
+    name: Backend lint, formatting, types, clean install, and tests
+    if: github.event_name != 'deployment_status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: back-end/src
+      PYTHON_DOTENV_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: back-end/requirements.txt
+      - name: Clean install
+        run: |
+          python -m pip install -r back-end/requirements.txt
+          python -m pip install ruff==0.11.13 pyright==1.1.403
+          python -m pip check
+      - name: Pylint
+        run: pylint back-end/src --rcfile=back-end/.pylintrc
+      - name: Python formatting
+        if: ${{ !cancelled() }}
+        run: ruff format --check --line-length 100 back-end/src tests scripts
+      - name: Python type checks
+        if: ${{ !cancelled() }}
+        run: pyright --project pyrightconfig.ci.json
+      - name: Python tests
+        if: ${{ !cancelled() }}
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend lint, formatting, types, clean install, and production build
+    if: github.event_name != 'deployment_status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: front-end
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - name: Clean install from lockfile
+        run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: Frontend formatting
+        if: ${{ !cancelled() }}
+        run: npx --yes prettier@3.5.3 --check src vite.config.ts eslint.config.js index.html
+      - name: TypeScript checks
+        if: ${{ !cancelled() }}
+        run: npx --no-install tsc -b --pretty false
+      - name: Production build
+        if: ${{ !cancelled() }}
+        run: npm run build
+
+  static-security:
+    name: Static security analysis (Python and TypeScript)
+    if: github.event_name != 'deployment_status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install scanner
+        run: python -m pip install semgrep==1.136.0
+      - name: Scan source for security findings
+        run: >-
+          semgrep scan --config p/security-audit --config p/python
+          --config p/typescript --error --strict --metrics off
+          back-end/src front-end/src
+
+  deployment-setup:
+    name: Workflow validation and backend container smoke check
+    if: github.event_name != 'deployment_status'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate GitHub Actions workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7
+      - name: Build backend production image with a clean install
+        run: docker build --pull --no-cache -t knowledge-ai:ci back-end
+      - name: Start image and verify public API contract
+        run: |
+          docker run -d --name knowledge-ai-ci -p 127.0.0.1:8000:8000 \
+            -e PYTHON_DOTENV_DISABLED=1 knowledge-ai:ci
+          curl --fail --silent --show-error --retry 20 --retry-delay 2 \
+            --retry-connrefused --max-time 10 \
+            http://127.0.0.1:8000/openapi.json -o /tmp/openapi.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          schema = json.loads(Path('/tmp/openapi.json').read_text())
+          expected = {'/chat': 'post', '/upload': 'post', '/threads': 'get',
+                      '/auth/gmail/start': 'get', '/auth/gmail/callback': 'get'}
+          for path, method in expected.items():
+              assert method in schema['paths'].get(path, {}), f'Missing {method} {path}'
+          print('Container started and expected API routes are registered.')
+          PY
+      - name: Container diagnostics and cleanup
+        if: always()
+        run: |
+          docker logs knowledge-ai-ci 2>&1 || true
+          docker rm -f knowledge-ai-ci || true
+
+  deployment-health:
+    name: Check configured deployment health
+    if: >-
+      vars.DEPLOYMENT_HEALTH_URL != '' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'deployment_status' && github.event.deployment_status.state == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Configure a public HTTPS readiness endpoint, not the frontend home page.
+      DEPLOYMENT_HEALTH_URL: ${{ vars.DEPLOYMENT_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Probe deployment readiness
+        run: python scripts/check_deployment.py
+
+  deployment-monitoring-todo:
+    name: Report pending deployment monitoring setup
+    if: >-
+      vars.DEPLOYMENT_HEALTH_URL == '' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'deployment_status')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Explain skipped deployment probe
+        run: |
+          echo '::notice::Deployment monitoring is pending: configure DEPLOYMENT_HEALTH_URL after adding a readiness endpoint.'
+          echo 'Deployment monitoring was not performed. Configure DEPLOYMENT_HEALTH_URL after a host and readiness endpoint exist.' >> "$GITHUB_STEP_SUMMARY"
+
+  ai-evaluations:
+    name: Scheduled real-model AI evaluations
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: back-end/src
+      PYTHON_DOTENV_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: back-end/requirements.txt
+      - name: Install application dependencies
+        run: python -m pip install -r back-end/requirements.txt
+      - name: Start isolated Ollama and provision application models
+        run: |
+          docker run -d --name ollama-eval -p 127.0.0.1:11434:11434 ollama/ollama:0.6.8
+          curl --fail --silent --show-error --retry 20 --retry-delay 2 \
+            --retry-connrefused --max-time 10 http://127.0.0.1:11434/api/tags
+          docker exec ollama-eval ollama pull llama3.1:8b
+          docker exec ollama-eval ollama pull nomic-embed-text:latest
+      - name: Evaluate routing, grounded answers, abstention, and retrieval
+        run: python scripts/evaluate_ai.py
+      - name: Upload synthetic evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-evaluation-${{ github.run_id }}
+          path: artifacts/ai-evaluation.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Ollama diagnostics and cleanup
+        if: always()
+        run: |
+          docker logs ollama-eval 2>&1 || true
+          docker rm -f ollama-eval || true
