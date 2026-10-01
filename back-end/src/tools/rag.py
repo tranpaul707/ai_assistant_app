@@ -23,4 +23,14 @@ def search_private_knowledge(query: str) -> str:
     if not documents:
         return "No relevant documents were found."
 
-    return "\n\n".join(doc.page_content for doc in documents)
+    blocks = []
+    for doc in documents:
+        filename = (
+            (doc.metadata or {}).get("filename")
+            or (doc.metadata or {}).get("source")
+            or "unknown"
+        )
+        source_type = (doc.metadata or {}).get("source_type") or ""
+        header = f"[source: {filename}]" if source_type != "email" else "[source: gmail]"
+        blocks.append(f"{header}\n{doc.page_content}")
+    return "\n\n".join(blocks)

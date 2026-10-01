@@ -34,3 +34,24 @@ def test_ingest_uses_source_key_and_replaces():
     kwargs = store.add_documents.call_args.kwargs
     assert kwargs["ids"] == ["email:e1-0", "email:e1-1"]
     assert all(c.metadata.get("source") == "email:e1" for c in kwargs["documents"])
+
+
+def test_ingest_upload_tags_filename_in_metadata_and_content():
+    docs = [Document(page_content="resume text here", metadata={})]
+    store = MagicMock()
+    store.get.return_value = {"ids": []}
+    chunks = [Document(page_content="resume text here", metadata={})]
+
+    with (
+        patch("knowledge.ingest.vector_store", store),
+        patch("knowledge.ingest.chunk_text", return_value=chunks),
+    ):
+        from knowledge.ingest import ingest
+
+        ingest(docs, "Paul Tran Resume.pdf", source_type="upload")
+
+    saved = store.add_documents.call_args.kwargs["documents"]
+    assert saved[0].metadata["filename"] == "Paul Tran Resume.pdf"
+    assert saved[0].metadata["source_type"] == "upload"
+    assert saved[0].metadata["source"] == "Paul Tran Resume.pdf"
+    assert saved[0].page_content.startswith("<source: Paul Tran Resume.pdf>")

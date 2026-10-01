@@ -15,17 +15,24 @@ _OPTIMIZER_SYSTEM = """You optimize search queries for the Gmail API `q` paramet
 
 Return structured fields for a precise-but-not-brittle mailbox search.
 
-Rules:
-- keywords: 2-6 concrete terms that are likely in the email (names, companies, topics).
-  No filler words (find, email, my, please, about). Prefer nouns.
-- Only set sender, to, subject, after, before, newer_than, older_than when the
-  user question clearly implies them. Never invent email addresses or exact titles.
+Critical distinctions:
+- sender = who sent the email (Gmail from:). Use for:
+  "emails from John", "John sent me", "received from UConn", "from john@x.com"
+- to = recipient (Gmail to:). Use for:
+  "emails to John", "I sent John", "sent to john@x.com", "emails I sent Bob"
+- Never swap sender and to.
+- Exact email addresses must go in sender or to unchanged (e.g. john@example.com).
+  Do NOT put email addresses into keywords.
+- Person/org names for from/to go in sender/to, NOT in keywords.
+- keywords: topic/content terms only (project, meeting, internship). No filler words.
+  Do not repeat the sender/recipient name inside keywords.
+- in_sent=true when the user clearly means mail they sent (Sent folder), e.g.
+  "what did I send…", "emails I sent to…". Leave false for normal inbox/received asks.
 - Dates: after/before as YYYY/MM/DD; relative windows as newer_than/older_than
-  like 7d, 30d, 1y.
-- raw_query: optional extra Gmail operators only when helpful
-  (has:attachment, filename:pdf, -in:spam, "exact phrase").
-- Prefer recall over over-filtering: when unsure, leave a filter blank and keep
-  good keywords.
+  like 7d, 30d, 1y ("last week" → newer_than=7d).
+- raw_query: optional extra operators only when helpful (-in:spam, has:attachment).
+- Prefer keeping sender/to filled when the user named a person/address.
+- Never invent email addresses. A bare name like John or UConn is valid in sender/to.
 - rationale: one short sentence explaining the query choice.
 """
 
@@ -33,16 +40,26 @@ Rules:
 class OptimizedGmailSearch(BaseModel):
     keywords: str = Field(
         default="",
-        description="2-6 concrete Gmail search terms (not a full sentence)",
+        description="Topic/content terms only — not person names or email addresses",
     )
-    sender: str = Field(default="", description="from: value if clearly stated")
-    to: str = Field(default="", description="to: value if clearly stated")
+    sender: str = Field(
+        default="",
+        description="Gmail from: person name or exact email if user means sender",
+    )
+    to: str = Field(
+        default="",
+        description="Gmail to: person name or exact email if user means recipient",
+    )
     subject: str = Field(default="", description="subject keywords if clearly stated")
     after: str = Field(default="", description="YYYY/MM/DD if clearly stated")
     before: str = Field(default="", description="YYYY/MM/DD if clearly stated")
     newer_than: str = Field(default="", description="e.g. 7d, 30d, 1y")
     older_than: str = Field(default="", description="e.g. 1y")
     has_attachment: bool = Field(default=False)
+    in_sent: bool = Field(
+        default=False,
+        description="True when searching mail the user sent (in:sent)",
+    )
     raw_query: str = Field(default="", description="Optional extra Gmail operators")
     rationale: str = Field(default="", description="Short reason for this query")
 
@@ -63,11 +80,12 @@ def merge_search_hints(
     newer_than: str = "",
     older_than: str = "",
     has_attachment: bool = False,
+    in_sent: bool = False,
     raw_query: str = "",
 ) -> dict[str, Any]:
-    """Prefer caller-provided filters (user-stated); take optimizer keywords/gaps."""
+    """Prefer caller-provided people/date filters; take optimizer topic keywords/gaps."""
     return {
-        "keywords": _clean(optimized.keywords) or _clean(keywords),
+        "keywords": _clean(keywords) or _clean(optimized.keywords),
         "sender": _clean(sender) or _clean(optimized.sender),
         "to": _clean(to) or _clean(optimized.to),
         "subject": _clean(subject) or _clean(optimized.subject),
@@ -76,6 +94,7 @@ def merge_search_hints(
         "newer_than": _clean(newer_than) or _clean(optimized.newer_than),
         "older_than": _clean(older_than) or _clean(optimized.older_than),
         "has_attachment": bool(has_attachment or optimized.has_attachment),
+        "in_sent": bool(in_sent or optimized.in_sent),
         "raw_query": _clean(raw_query) or _clean(optimized.raw_query),
         "rationale": _clean(optimized.rationale),
     }
@@ -93,6 +112,7 @@ def optimize_gmail_query(
     newer_than: str = "",
     older_than: str = "",
     has_attachment: bool = False,
+    in_sent: bool = False,
     raw_query: str = "",
 ) -> dict[str, Any] | None:
     """Run the mini query agent. Returns merged search fields, or None on failure."""
@@ -106,6 +126,7 @@ def optimize_gmail_query(
         f"newer_than={newer_than!r}" if _clean(newer_than) else "",
         f"older_than={older_than!r}" if _clean(older_than) else "",
         "has_attachment=true" if has_attachment else "",
+        "in_sent=true" if in_sent else "",
         f"raw_query={raw_query!r}" if _clean(raw_query) else "",
     ]
     hints = "\n".join(line for line in hint_lines if line) or "(none)"
@@ -113,7 +134,8 @@ def optimize_gmail_query(
     user_content = (
         f"User question:\n{question.strip()}\n\n"
         f"Optional hints already extracted by the main agent:\n{hints}\n\n"
-        "Optimize the Gmail search fields."
+        "Optimize the Gmail search fields. Put people/addresses in sender/to, "
+        "topics in keywords, and set in_sent when the user means sent mail."
     )
 
     try:
@@ -139,11 +161,15 @@ def optimize_gmail_query(
             newer_than=newer_than,
             older_than=older_than,
             has_attachment=has_attachment,
+            in_sent=in_sent,
             raw_query=raw_query,
         )
         logger.info(
-            "Gmail query optimizer keywords=%r rationale=%r",
+            "Gmail query optimizer sender=%r to=%r keywords=%r in_sent=%s rationale=%r",
+            merged.get("sender"),
+            merged.get("to"),
             merged.get("keywords"),
+            merged.get("in_sent"),
             merged.get("rationale"),
         )
         print("Finished mini agent: optimize_gmail_query")

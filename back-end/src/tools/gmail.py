@@ -8,7 +8,7 @@ from langchain_core.tools import InjectedToolArg, tool
 
 from knowledge.ingest import ingest
 from services.gmail.client import search_emails
-from services.gmail.query import broaden_gmail_queries
+from services.gmail.query import broaden_gmail_queries, email_matches_people
 from services.gmail.query_optimizer import optimize_gmail_query
 from services.gmail.rerank import rerank_emails
 from services.gmail.to_documents import email_to_documents
@@ -48,10 +48,17 @@ def _format_emails(emails) -> str:
 @tool(
     "search_gmail",
     description=(
-        "Search the user's Gmail mailbox. Set question to the user's intent. "
-        "Optional filters (sender, subject, dates, keywords) are hints — a "
-        "query optimizer rewrites them into a better Gmail search automatically. "
-        "Only pass filters the user clearly stated; do not invent them."
+        "Search the user's Gmail mailbox with structured filters. "
+        "ALWAYS put people in sender/to — never leave them only inside question/keywords. "
+        "sender = who sent it (from:). Examples: emails from John, John sent me, "
+        "from john@example.com, received from UConn. "
+        "to = recipient (to:). Examples: emails to John, I sent Sarah, "
+        "sent to john@example.com. "
+        "keywords = topic/content only (project, meeting) — not person names or addresses. "
+        "in_sent=true for mail the user sent. "
+        "Pass exact email addresses unchanged in sender/to. "
+        "Optional: subject, after/before (YYYY/MM/DD), newer_than (7d/30d). "
+        "Only set filters the user clearly stated; do not invent addresses."
     ),
     response_format="content",
 )
@@ -67,6 +74,7 @@ def search_gmail(
     newer_than: str = "",
     older_than: str = "",
     has_attachment: bool = False,
+    in_sent: bool = False,
     raw_query: str = "",
 ) -> str:
     """Optimize the Gmail query, search with fallbacks, rerank, return email text."""
@@ -88,6 +96,7 @@ def search_gmail(
         newer_than=newer_than,
         older_than=older_than,
         has_attachment=has_attachment,
+        in_sent=in_sent,
         raw_query=raw_query,
     )
 
@@ -102,6 +111,7 @@ def search_gmail(
         "newer_than": newer_than,
         "older_than": older_than,
         "has_attachment": has_attachment,
+        "in_sent": in_sent,
         "raw_query": raw_query,
     }
     optimizer_note = ""
@@ -118,16 +128,20 @@ def search_gmail(
                 "newer_than": optimized.get("newer_than", ""),
                 "older_than": optimized.get("older_than", ""),
                 "has_attachment": bool(optimized.get("has_attachment")),
+                "in_sent": bool(optimized.get("in_sent")),
                 "raw_query": optimized.get("raw_query", ""),
             }
         )
+
+    people_sender = (search_args.get("sender") or "").strip()
+    people_to = (search_args.get("to") or "").strip()
 
     queries = broaden_gmail_queries(**search_args)
 
     if not queries:
         return (
-            "Need a clearer email search. Ask for sender, subject keywords, "
-            "or a time range."
+            "Need a clearer email search. Ask for sender, recipient, subject "
+            "keywords, or a time range."
         )
 
     emails = []
@@ -155,8 +169,23 @@ def search_gmail(
         logger.info("Gmail search empty; tried=%s", tried)
         return (
             "No matching emails were found. "
-            "Ask for different keywords, sender, or a broader time range."
+            "Ask for different keywords, sender, recipient, or a broader time range."
         )
+
+    # Keep person constraints even if Gmail returns loose name matches.
+    if people_sender or people_to:
+        filtered = [
+            email
+            for email in emails
+            if email_matches_people(
+                sender_header=email.sender,
+                recipients=email.recipients,
+                sender_filter=people_sender,
+                to_filter=people_to,
+            )
+        ]
+        if filtered:
+            emails = filtered
 
     ranked = rerank_emails(question or keywords or used_query, emails, top_k=_RETURN_TOP_K)
 
@@ -178,6 +207,4 @@ def search_gmail(
         len(ranked),
         ingested,
     )
-    # Return email content only — never append query/optimizer metadata (the
-    # model tends to echo those brackets into the user-visible answer).
     return _format_emails(ranked)

@@ -43,6 +43,14 @@ const App = () => {
     void refreshThreads();
   }, [refreshThreads]);
 
+  useEffect(() => {
+    return () => {
+      if (submitHighlightTimer.current !== null) {
+        window.clearTimeout(submitHighlightTimer.current);
+      }
+    };
+  }, []);
+
   const clearPendingFile = () => {
     setPendingFile(null);
     const input = document.getElementById("file-input") as HTMLInputElement | null;
@@ -74,6 +82,9 @@ const App = () => {
     }
   };
 
+  const [submitHighlighted, setSubmitHighlighted] = useState(false);
+  const submitHighlightTimer = useRef<number | null>(null);
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const currentMessage = txt.trim();
@@ -81,6 +92,14 @@ const App = () => {
 
     chatRef.current?.sendMessage(currentMessage);
     setTxt("");
+    setSubmitHighlighted(true);
+    if (submitHighlightTimer.current !== null) {
+      window.clearTimeout(submitHighlightTimer.current);
+    }
+    submitHighlightTimer.current = window.setTimeout(() => {
+      setSubmitHighlighted(false);
+      submitHighlightTimer.current = null;
+    }, 700);
     window.setTimeout(() => void refreshThreads(), 800);
   };
 
@@ -170,7 +189,12 @@ const App = () => {
                   onStatusChange={setUploadStatus}
                 />
 
-                <button type="submit" id="submit-input">
+                <button
+                  type="submit"
+                  id="submit-input"
+                  className={submitHighlighted ? "submit-input--pressed" : undefined}
+                  aria-pressed={submitHighlighted}
+                >
                   Submit
                 </button>
               </div>
