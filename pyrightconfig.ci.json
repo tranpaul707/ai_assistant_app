@@ -1,0 +1,6 @@
+{
+  "include": ["back-end/src", "scripts"],
+  "extraPaths": ["back-end/src"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

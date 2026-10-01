@@ -42,3 +42,47 @@ uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Requires Redis (`redis://localhost:6379`) and Ollama for chat + embeddings.
+
+## CI production checks
+
+`.github/workflows/production_check.yml` runs on pull requests and pushes to
+`main`/`master`. It checks Python/TypeScript lint, formatting, and types; clean
+dependency installation; tests; frontend production build; static security
+analysis; workflow syntax; and backend Docker build/startup/API registration.
+Checks report existing findings and do not automatically rewrite source files.
+Python installs currently use unpinned runtime requirements; a successful clean
+install does not establish reproducibility until dependencies are locked.
+
+The container smoke check verifies startup and API routes only. It does not
+prove Redis, Ollama, Google OAuth, authenticated chat, or persistent storage work
+in a hosted deployment. Deployment hosting and continuous monitoring remain to
+be configured.
+
+Weekly Mondays at 09:17 UTC, and on manual runs, the workflow provisions isolated
+Ollama models and evaluates routing, synthetic document retrieval, grounded
+answers, and abstention. Results are uploaded as an `ai-evaluation` artifact.
+These CPU evaluations may be slow; model tags currently follow the application
+defaults and are not immutable digests. No real Gmail account or private files
+are used. Extend the initial fixtures and establish latency budgets before using
+this small suite as a release gate.
+
+Optional deployment probes run weekly, manually, and after successful GitHub
+deployment-status events once repository variable `DEPLOYMENT_HEALTH_URL` is
+set. Until then, a workflow notice reports that monitoring is pending. The URL
+must be a public HTTPS readiness endpoint returning HTTP 200 with JSON
+`{"status":"ok"}` or `{"status":"ready"}`. The eventual deploy workflow must
+publish deployment-status events; this workflow does not deploy the application.
+Enable GitHub Actions failure notifications separately.
+
+Useful local commands, run from the repository root after installing CI tools:
+
+```bash
+pylint back-end/src --rcfile=back-end/.pylintrc
+ruff format --check --line-length 100 back-end/src tests scripts
+pyright --project pyrightconfig.ci.json
+python -m pytest -q
+python scripts/evaluate_ai.py  # PYTHONPATH=back-end/src; needs application Ollama models
+```
+
+Frontend formatting uses Prettier 3.5.3; Python formatting uses Ruff 0.11.13,
+and Python types use Pyright 1.1.403. Exact invocation commands are in the workflow.
