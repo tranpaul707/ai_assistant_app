@@ -16,6 +16,7 @@ from agents.agent import (
 from llm.client import llm
 from memory.checkpointer import get_checkpointer, thread_config
 from memory.manager import memory_manager
+from memory.threads import require_thread_owner
 
 
 class GraphState(TypedDict):
@@ -27,7 +28,18 @@ class RouteDecision(BaseModel):
     route: Literal["general", "private"]
 
 
-def classify(query: str) -> Literal["general", "private"]:
+def classify(
+    query: str, *, context: list[BaseMessage] | None = None
+) -> Literal["general", "private"]:
+    recent = []
+    for message in (context or [])[-6:]:
+        if message.type in ("human", "ai"):
+            recent.append(
+                {
+                    "role": "user" if message.type == "human" else "assistant",
+                    "content": message_text(message.content)[:1000],
+                }
+            )
     decision = llm.with_structured_output(RouteDecision).invoke(
         [
             {
@@ -44,9 +56,13 @@ def classify(query: str) -> Literal["general", "private"]:
                 general = greetings, chit-chat, math, jokes, coding, or anything answerable
                 from general world knowledge without searching private documents or email.
 
+                Use recent conversation context to resolve follow-ups such as
+                "what did he say?", "summarize that thread", or "compare it with my PDF".
+                A new unrelated general question remains general, even after email.
                 When unsure whether documents or email are needed, prefer private.
                 """,
             },
+            *recent,
             {
                 "role": "user",
                 "content": query,
@@ -72,7 +88,17 @@ def _latest_user_text(messages: list[BaseMessage]) -> str:
 
 
 def classifier_node(state: GraphState):
-    return {"route": classify(_latest_user_text(state["messages"]))}
+    messages = state["messages"]
+    # Avoid repeating the current question in the recent context.
+    latest = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if isinstance(messages[index], HumanMessage)
+        ),
+        len(messages),
+    )
+    return {"route": classify(_latest_user_text(messages), context=messages[:latest])}
 
 
 def route_request(state: GraphState) -> Literal["general", "private"]:
@@ -103,12 +129,14 @@ def get_graph():
 
 def stream_routed(
     query: str,
-    thread_id: str = "user123",
+    thread_id: str,
     *,
-    user_sub: str | None = None,
+    user_sub: str,
 ):
     """Run the parent graph and yield assistant answer tokens for SSE."""
+    require_thread_owner(thread_id, user_sub=user_sub)
     config = thread_config(thread_id, user_sub=user_sub)
+    config["recursion_limit"] = 128
 
     memory_block, _ = memory_manager.context_for_turn(user_sub, query=query)
     turn_messages: list[BaseMessage] = []

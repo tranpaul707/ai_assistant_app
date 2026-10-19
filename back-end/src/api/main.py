@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from api.routes import auth_gmail, chat, upload
+from api.privacy import RedactOAuthQuery
 from core.settings import FRONTEND_ORIGIN
 
 
@@ -24,6 +25,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RedactOAuthQuery)
 
 app.include_router(chat.router)
 app.include_router(upload.router)

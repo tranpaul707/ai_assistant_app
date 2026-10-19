@@ -56,9 +56,7 @@ class MemoryCandidate(BaseModel):
     type: Literal["fact", "preference"]
     key: str = Field(description="Stable snake_case topic key")
     text: str = Field(description="Concise third-person memory statement")
-    worth_keeping: bool = Field(
-        description="True only if durable and useful across future chats"
-    )
+    worth_keeping: bool = Field(description="True only if durable and useful across future chats")
     reason: str = ""
 
 
@@ -256,9 +254,7 @@ class MemoryManager:
         # (No-op unless somehow upserted.)
 
         if plan.used_memory_ids:
-            used = [
-                i for i in items if str(i.get("id") or "") in set(plan.used_memory_ids)
-            ]
+            used = [i for i in items if str(i.get("id") or "") in set(plan.used_memory_ids)]
             store.touch_items(used)
 
         if remove_ids:
@@ -278,8 +274,7 @@ class MemoryManager:
         items = store.prune_unused(items)
         store.persist_items(user_sub, items)
         logger.info(
-            "Memory manager applied user=...%s upserts=%d removals=%d used=%d",
-            user_sub[-6:],
+            "Memory manager applied upserts=%d removals=%d used=%d",
             len(upserts),
             len(set(remove_ids)),
             len(plan.used_memory_ids),

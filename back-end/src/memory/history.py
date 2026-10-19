@@ -8,12 +8,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.agent import looks_like_tool_args_json, message_text
 from memory.checkpointer import get_checkpointer, thread_config
+from memory.threads import require_thread_owner
 
 
-def messages_for_thread(thread_id: str) -> list[dict[str, Any]]:
+def messages_for_thread(thread_id: str, *, user_sub: str) -> list[dict[str, Any]]:
     """Return FE-friendly messages (user/assistant) for a conversation thread."""
+    require_thread_owner(thread_id, user_sub=user_sub)
     checkpointer = get_checkpointer()
-    snapshot = checkpointer.get_tuple(thread_config(thread_id))
+    snapshot = checkpointer.get_tuple(thread_config(thread_id, user_sub=user_sub))
     if snapshot is None:
         return []
 
@@ -25,9 +27,7 @@ def messages_for_thread(thread_id: str) -> list[dict[str, Any]]:
         if isinstance(message, HumanMessage):
             text = message_text(message.content)
             if text.strip():
-                result.append(
-                    {"id": index, "role": "user", "content": text, "isLoading": False}
-                )
+                result.append({"id": index, "role": "user", "content": text, "isLoading": False})
         elif isinstance(message, AIMessage):
             # Skip tool-call-only assistant messages.
             if getattr(message, "tool_calls", None):

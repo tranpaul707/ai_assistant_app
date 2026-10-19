@@ -22,9 +22,12 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "http://127.0.0.1:8000/auth/gmail/callback",
 )
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+GMAIL_TIMEZONE = os.getenv("GMAIL_TIMEZONE", "UTC")
 
 DATA_DIR = _BACK_END_ROOT / "data"
 OAUTH_DIR = DATA_DIR / "oauth"
+GMAIL_TOKEN_ENCRYPTION_KEY = os.getenv("GMAIL_TOKEN_ENCRYPTION_KEY", "")
+OAUTH_STATE_TTL_SECONDS = 600
 
 GMAIL_SCOPES = [
     "openid",

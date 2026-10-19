@@ -6,7 +6,8 @@ import type { MessageData } from "./components/Message.tsx";
 import FileUpload from "./components/FileUpload.tsx";
 import type { UploadStatus } from "./components/FileUpload.tsx";
 import GoogleSignin from "./components/GoogleSignin.tsx";
-import { API_BASE, authHeaders } from "./api/client";
+import type { GoogleIdTokenPayload } from "./components/GoogleSignin.tsx";
+import { API_BASE, authHeaders, getIdToken } from "./api/client";
 
 interface ThreadSummary {
   thread_id: string;
@@ -20,24 +21,53 @@ function newThreadId(): string {
 
 const App = () => {
   const [txt, setTxt] = useState("");
-  const [activeThreadId, setActiveThreadId] = useState<string>(() => newThreadId());
+  const [activeThreadId, setActiveThreadId] = useState<string>(() =>
+    newThreadId(),
+  );
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
   const chatRef = useRef<ChatWindowHandle>(null);
+  const accountRef = useRef<string | null>(null);
+  const selectedThreadRef = useRef(activeThreadId);
+  const submitHighlightTimer = useRef<number | null>(null);
 
   const refreshThreads = useCallback(async () => {
+    const token = getIdToken();
+    if (!token) {
+      setThreads([]);
+      return;
+    }
     try {
       const response = await fetch(`${API_BASE}/threads`, {
         headers: { ...authHeaders() },
       });
-      if (!response.ok) return;
+      if (!response.ok || getIdToken() !== token) return;
       const data = await response.json();
+      if (getIdToken() !== token) return;
       setThreads(data.threads ?? []);
     } catch {
       /* ignore — Redis may be down during early boot */
     }
   }, []);
+
+  const handleAuthChange = useCallback(
+    (user: GoogleIdTokenPayload | null) => {
+      const nextAccount = user?.sub ?? null;
+      if (accountRef.current !== nextAccount) {
+        accountRef.current = nextAccount;
+        const nextThread = newThreadId();
+        selectedThreadRef.current = nextThread;
+        setActiveThreadId(nextThread);
+        setThreads([]);
+        setPendingFile(null);
+        setTxt("");
+        chatRef.current?.clearMessages();
+      }
+      void refreshThreads();
+    },
+    [refreshThreads],
+  );
 
   useEffect(() => {
     void refreshThreads();
@@ -53,12 +83,15 @@ const App = () => {
 
   const clearPendingFile = () => {
     setPendingFile(null);
-    const input = document.getElementById("file-input") as HTMLInputElement | null;
+    const input = document.getElementById(
+      "file-input",
+    ) as HTMLInputElement | null;
     if (input) input.value = "";
   };
 
   const handleNewChat = () => {
     const id = newThreadId();
+    selectedThreadRef.current = id;
     setActiveThreadId(id);
     chatRef.current?.clearMessages();
   };
@@ -66,31 +99,43 @@ const App = () => {
   const handleSelectThread = async (threadId: string) => {
     if (threadId === activeThreadId) return;
     setActiveThreadId(threadId);
+    selectedThreadRef.current = threadId;
+    chatRef.current?.clearMessages();
+    const token = getIdToken();
     try {
       const response = await fetch(`${API_BASE}/threads/${threadId}`, {
         headers: { ...authHeaders() },
       });
       if (!response.ok) {
-        chatRef.current?.clearMessages();
+        if (getIdToken() === token && selectedThreadRef.current === threadId) {
+          chatRef.current?.clearMessages();
+        }
         return;
       }
       const data = await response.json();
+      if (getIdToken() !== token || selectedThreadRef.current !== threadId)
+        return;
       const messages = (data.messages ?? []) as MessageData[];
       chatRef.current?.loadMessages(messages);
     } catch {
-      chatRef.current?.clearMessages();
+      if (getIdToken() === token && selectedThreadRef.current === threadId) {
+        chatRef.current?.clearMessages();
+      }
     }
   };
 
   const [submitHighlighted, setSubmitHighlighted] = useState(false);
-  const submitHighlightTimer = useRef<number | null>(null);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const currentMessage = txt.trim();
     if (!currentMessage) return;
+    if (!getIdToken()) {
+      window.alert("Sign in with Google to chat.");
+      return;
+    }
 
-    chatRef.current?.sendMessage(currentMessage);
+    if (!chatRef.current?.sendMessage(currentMessage)) return;
     setTxt("");
     setSubmitHighlighted(true);
     if (submitHighlightTimer.current !== null) {
@@ -109,7 +154,11 @@ const App = () => {
         <aside className="chat-sidebar" aria-label="Conversation history">
           <div className="chat-sidebar__header">
             <h3 className="chat-sidebar__title">Chats</h3>
-            <button type="button" className="new-chat-button" onClick={handleNewChat}>
+            <button
+              type="button"
+              className="new-chat-button"
+              onClick={handleNewChat}
+            >
               New Chat
             </button>
           </div>
@@ -145,7 +194,7 @@ const App = () => {
 
               <h2 className="text-info">Knowledge Assistant</h2>
 
-              <GoogleSignin onAuthChange={() => void refreshThreads()} />
+              <GoogleSignin onAuthChange={handleAuthChange} />
             </div>
           </div>
 
@@ -192,7 +241,9 @@ const App = () => {
                 <button
                   type="submit"
                   id="submit-input"
-                  className={submitHighlighted ? "submit-input--pressed" : undefined}
+                  className={
+                    submitHighlighted ? "submit-input--pressed" : undefined
+                  }
                   aria-pressed={submitHighlighted}
                 >
                   Submit
