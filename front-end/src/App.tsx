@@ -126,6 +126,21 @@ const App = () => {
 
   const [submitHighlighted, setSubmitHighlighted] = useState(false);
 
+  const handleComposerKeyDown = (
+    event: React.KeyboardEvent<HTMLTextAreaElement>,
+  ) => {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229
+    )
+      return;
+
+    event.preventDefault();
+    if (!event.repeat) event.currentTarget.form?.requestSubmit();
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const currentMessage = txt.trim();
@@ -226,9 +241,11 @@ const App = () => {
                 <textarea
                   className="scrollable-textbox"
                   placeholder="Enter your message"
+                  title="Enter to send, Shift+Enter for a new line"
                   id="chat-input"
                   value={txt}
                   onChange={(e) => setTxt(e.target.value)}
+                  onKeyDown={handleComposerKeyDown}
                 />
 
                 <FileUpload
