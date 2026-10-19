@@ -15,6 +15,7 @@ from typing import Any, Literal
 import redis
 
 from core.settings import REDIS_URI
+from core.identity import owner_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ MemoryType = Literal["fact", "preference"]
 # Unused memories expire after ~5–6 months.
 UNUSED_AFTER = timedelta(days=180)
 
-_KEY_PREFIX = "ltm:user:"
+_KEY_PREFIX = "ltm:v2:user:"
 
 
 def _client() -> redis.Redis:
@@ -31,8 +32,7 @@ def _client() -> redis.Redis:
 
 
 def _redis_key(user_sub: str) -> str:
-    safe = user_sub.replace("/", "_").replace(":", "_")
-    return f"{_KEY_PREFIX}{safe}"
+    return f"{_KEY_PREFIX}{owner_namespace(user_sub)}"
 
 
 def _now() -> datetime:
@@ -60,7 +60,7 @@ def load_raw(user_sub: str) -> dict[str, Any]:
     if not user_sub:
         return empty_store()
     raw = _client().get(_redis_key(user_sub))
-    if not raw:
+    if not isinstance(raw, (str, bytes)) or not raw:
         return empty_store()
     try:
         data = json.loads(raw)
@@ -167,8 +167,7 @@ def upsert_memory(
         item
         for item in items
         if not (
-            item.get("type") == memory_type
-            and normalize_key(str(item.get("key") or "")) == key
+            item.get("type") == memory_type and normalize_key(str(item.get("key") or "")) == key
         )
     ]
     remaining.append(new_item(memory_type=memory_type, key=key, text=text, now=now))
@@ -194,9 +193,7 @@ def remove_by_keys(
     out: list[dict[str, Any]] = []
     for item in items:
         item_key = normalize_key(str(item.get("key") or ""))
-        if item_key in normalized and (
-            memory_type is None or item.get("type") == memory_type
-        ):
+        if item_key in normalized and (memory_type is None or item.get("type") == memory_type):
             continue
         out.append(item)
     return out

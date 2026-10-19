@@ -1,34 +1,36 @@
+"""Authenticated OAuth initiation and browser/account-bound Gmail callback."""
+
 from __future__ import annotations
 
 import logging
+import re
 import secrets
-from urllib.parse import urlencode
+from hashlib import sha256
+from urllib.parse import urlencode, urlparse
 
 import requests
-from fastapi import APIRouter, Header, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
+from redis.exceptions import RedisError
 
-from core.auth import claims_from_id_token, user_sub_from_authorization
-from core.settings import FRONTEND_ORIGIN
+from core.auth import AuthenticatedUser, claims_from_id_token
+from core.identity import require_identity
+from core.settings import FRONTEND_ORIGIN, GOOGLE_REDIRECT_URI, OAUTH_STATE_TTL_SECONDS
 from services.gmail.client import authorization_url, exchange_code, persist_credentials
-from services.gmail.token_store import has_gmail_tokens
+from services.gmail.oauth_state import consume_state, save_state
+from services.gmail.token_store import has_gmail_tokens, load_tokens, token_cipher
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/auth/gmail", tags=["gmail-auth"])
-
-# Short-lived OAuth state → {sub, code_verifier}. In-memory is enough for local.
-_pending_states: dict[str, dict[str, str]] = {}
+_BROWSER_COOKIE = "gmail_oauth_browser"
 
 
 def _sub_from_credentials(creds) -> str | None:
-    id_token_jwt = getattr(creds, "id_token", None)
-    if id_token_jwt:
-        claims = claims_from_id_token(id_token_jwt)
-        if claims and claims.get("sub"):
-            return str(claims["sub"])
-
-    # Fall back to userinfo with the access token.
+    jwt = getattr(creds, "id_token", None)
+    if jwt:
+        claims = claims_from_id_token(jwt)
+        # An invalid ID token must not fall back to a different identity source.
+        return claims["sub"] if claims else None
     token = getattr(creds, "token", None)
     if not token:
         return None
@@ -38,110 +40,96 @@ def _sub_from_credentials(creds) -> str | None:
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,
         )
-        if response.ok:
-            sub = response.json().get("sub")
-            return str(sub) if sub else None
+        response.raise_for_status()
+        claims = response.json()
+        return require_identity(claims.get("sub")) if isinstance(claims, dict) else None
     except Exception:
-        logger.exception("Failed to resolve Google sub via userinfo")
-    return None
+        logger.warning("Gmail account identity could not be verified")
+        return None
 
 
-@router.get("/start")
-def gmail_start(
-    login_hint: str | None = Query(default=None),
-    id_token: str | None = Query(default=None),
-    authorization: str | None = Header(default=None),
-):
-    """Begin Gmail OAuth.
+def _redirect_error(reason: str):
+    return RedirectResponse(f"{FRONTEND_ORIGIN}/?{urlencode({'gmail': 'error', 'reason': reason})}")
 
-    Browser navigation cannot send Authorization headers, so the frontend also
-    passes the GIS id_token as a query param to bind the OAuth result to `sub`.
-    """
-    sub = user_sub_from_authorization(authorization)
-    hint = login_hint
 
-    if id_token:
-        claims = claims_from_id_token(id_token)
-        if claims:
-            sub = sub or (str(claims["sub"]) if claims.get("sub") else None)
-            hint = hint or claims.get("email")
-
-    if not hint and authorization:
-        parts = authorization.split(" ", 1)
-        if len(parts) == 2:
-            claims = claims_from_id_token(parts[1].strip())
-            if claims:
-                hint = claims.get("email")
-                sub = sub or (str(claims["sub"]) if claims.get("sub") else None)
-
-    if not sub:
-        raise HTTPException(
-            status_code=401,
-            detail="Sign in with Google first, then connect Gmail.",
-        )
-
-    state = secrets.token_urlsafe(24)
+@router.post("/start")
+def gmail_start(request: Request, user_sub: AuthenticatedUser):
+    # Tokens travel in Authorization only. Returned URL contains random state + PKCE.
+    state = secrets.token_urlsafe(32)
+    browser_nonce = request.cookies.get(_BROWSER_COOKIE, "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", browser_nonce):
+        browser_nonce = secrets.token_urlsafe(32)
     try:
-        url, code_verifier = authorization_url(login_hint=hint, state=state)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    _pending_states[state] = {"sub": sub, "code_verifier": code_verifier}
-    return RedirectResponse(url)
+        token_cipher()  # Refuse grants if secure credential storage is unconfigured.
+        url, verifier = authorization_url(state=state)
+        save_state(state, user_sub=user_sub, code_verifier=verifier, browser_nonce=browser_nonce)
+    except (RuntimeError, RedisError):
+        raise HTTPException(status_code=503, detail="Gmail connection is unavailable") from None
+    response = JSONResponse({"authorization_url": url}, headers={"Cache-Control": "no-store"})
+    response.set_cookie(
+        _BROWSER_COOKIE,
+        browser_nonce,
+        max_age=OAUTH_STATE_TTL_SECONDS,
+        httponly=True,
+        secure=urlparse(GOOGLE_REDIRECT_URI).scheme == "https",
+        samesite="lax",
+        path="/auth/gmail",
+    )
+    return response
 
 
 @router.get("/callback")
 def gmail_callback(
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
+    request: Request, code: str | None = None, state: str | None = None, error: str | None = None
 ):
-    if error:
-        qs = urlencode({"gmail": "error", "reason": error})
-        return RedirectResponse(f"{FRONTEND_ORIGIN}/?{qs}")
-    if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing code or state")
-
-    pending = _pending_states.pop(state, None) or {}
-    expected_sub = pending.get("sub")
-    code_verifier = pending.get("code_verifier")
+    if not state:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     try:
-        creds = exchange_code(code, code_verifier=code_verifier)
+        pending = consume_state(state)
+    except RedisError:
+        raise HTTPException(status_code=503, detail="Gmail connection is unavailable") from None
+    browser_nonce = request.cookies.get(_BROWSER_COOKIE, "")
+    if (
+        not pending
+        or not browser_nonce
+        or not secrets.compare_digest(
+            pending["browser_hash"], sha256(browser_nonce.encode()).hexdigest()
+        )
+    ):
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    # Consume even cancellation/error callbacks; never reflect arbitrary provider text.
+    if error:
+        return _redirect_error("authorization_denied")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+    try:
+        creds = exchange_code(code, code_verifier=pending["code_verifier"], state=state)
     except Exception:
-        logger.exception("Gmail token exchange failed")
-        qs = urlencode({"gmail": "error", "reason": "token_exchange_failed"})
-        return RedirectResponse(f"{FRONTEND_ORIGIN}/?{qs}")
-
-    sub = expected_sub or _sub_from_credentials(creds)
-
-    if not sub:
-        qs = urlencode({"gmail": "error", "reason": "missing_user"})
-        return RedirectResponse(f"{FRONTEND_ORIGIN}/?{qs}")
-
-    if not creds.refresh_token:
-        from services.gmail.token_store import load_tokens
-
-        existing = load_tokens(sub) or {}
-        if existing.get("refresh_token"):
-            creds.refresh_token = existing["refresh_token"]
-
-    if not creds.refresh_token:
-        qs = urlencode({"gmail": "error", "reason": "missing_refresh_token"})
-        return RedirectResponse(f"{FRONTEND_ORIGIN}/?{qs}")
-
-    persist_credentials(sub, creds)
-    logger.info("Gmail tokens saved for sub ending ...%s", sub[-6:])
-    qs = urlencode({"gmail": "connected"})
-    return RedirectResponse(f"{FRONTEND_ORIGIN}/?{qs}")
+        logger.warning("Gmail token exchange failed")
+        return _redirect_error("token_exchange_failed")
+    actual_sub = _sub_from_credentials(creds)
+    if actual_sub is None:
+        return _redirect_error("unverified_account")
+    if actual_sub != pending["sub"]:
+        return _redirect_error("account_mismatch")
+    try:
+        refresh_token = creds.refresh_token
+        if not refresh_token:
+            existing = load_tokens(actual_sub) or {}
+            refresh_token = existing.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            return _redirect_error("missing_refresh_token")
+        persist_credentials(actual_sub, creds, refresh_token=refresh_token)
+    except Exception:
+        logger.warning("Gmail credential storage failed")
+        return _redirect_error("credential_storage_failed")
+    return RedirectResponse(f"{FRONTEND_ORIGIN}/?{urlencode({'gmail': 'connected'})}")
 
 
 @router.get("/status")
-def gmail_status(authorization: str | None = Header(default=None)):
-    sub = user_sub_from_authorization(authorization)
-    if not sub:
-        return {"connected": False, "authenticated": False}
-    return {
-        "authenticated": True,
-        "connected": has_gmail_tokens(sub),
-        "sub": sub,
-    }
+def gmail_status(user_sub: AuthenticatedUser):
+    try:
+        connected = has_gmail_tokens(user_sub)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Gmail connection is unavailable") from None
+    return {"authenticated": True, "connected": connected}

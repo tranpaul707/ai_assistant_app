@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { ChangeEvent } from "react";
+import { API_BASE, authHeaders } from "../api/client";
 
 type UploadStatus = "idle" | "uploading";
 
@@ -30,8 +31,9 @@ const FileUpload = ({
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/upload", {
+      const response = await fetch(`${API_BASE}/upload`, {
         method: "POST",
+        headers: authHeaders(),
         body: formData,
       });
 
@@ -55,7 +57,11 @@ const FileUpload = ({
         onChange={handleFileChange}
       />
       {file && status !== "uploading" && (
-        <button type="button" className="upload-button" onClick={() => void handleFileUpload()}>
+        <button
+          type="button"
+          className="upload-button"
+          onClick={() => void handleFileUpload()}
+        >
           Upload
         </button>
       )}

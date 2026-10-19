@@ -9,7 +9,8 @@ _DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "chroma_db"
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 vector_store = Chroma(
-    collection_name="knowledge",
+    # Legacy shared chunks remain inaccessible until an explicit backed-up migration.
+    collection_name="knowledge_private_v2",
     embedding_function=embeddings,
     persist_directory=str(_DATA_DIR),
 )

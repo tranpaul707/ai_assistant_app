@@ -35,7 +35,10 @@ function sessionTtlMsFromToken(credential: string): number {
 }
 
 interface GoogleSigninProps {
-  onAuthChange?: (user: GoogleIdTokenPayload | null, idToken: string | null) => void;
+  onAuthChange?: (
+    user: GoogleIdTokenPayload | null,
+    idToken: string | null,
+  ) => void;
 }
 
 const GoogleSignin = ({ onAuthChange }: GoogleSigninProps) => {
@@ -83,7 +86,9 @@ const GoogleSignin = ({ onAuthChange }: GoogleSigninProps) => {
     } else if (gmail === "error") {
       const reason = params.get("reason") || "unknown";
       console.error("Gmail connect failed:", reason);
-      window.alert(`Gmail connect failed (${reason}). Try Connect Gmail again.`);
+      window.alert(
+        `Gmail connect failed (${reason}). Try Connect Gmail again.`,
+      );
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [refreshGmailStatus]);
@@ -111,22 +116,32 @@ const GoogleSignin = ({ onAuthChange }: GoogleSigninProps) => {
     onAuthChange?.(null, null);
   }
 
-  function connectGmail() {
+  async function connectGmail() {
     const token = getIdToken();
     if (!token) {
       console.error("Sign in with Google before connecting Gmail.");
       return;
     }
-    const params = new URLSearchParams();
-    if (user?.email) params.set("login_hint", user.email);
-    // Browser navigation cannot send Authorization; bind OAuth to this GIS user.
-    params.set("id_token", token);
-    window.location.href = `${API_BASE}/auth/gmail/start?${params.toString()}`;
+    try {
+      const response = await fetch(`${API_BASE}/auth/gmail/start`, {
+        method: "POST",
+        headers: authHeaders(),
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Gmail connection unavailable");
+      const data = await response.json();
+      window.location.assign(data.authorization_url);
+    } catch {
+      window.alert("Unable to connect Gmail. Sign in again or try later.");
+    }
   }
 
   if (user) {
     return (
-      <div className="google-signin google-signin--signed-in" title={user.email}>
+      <div
+        className="google-signin google-signin--signed-in"
+        title={user.email}
+      >
         {user.picture ? (
           <img
             src={user.picture}
@@ -149,11 +164,19 @@ const GoogleSignin = ({ onAuthChange }: GoogleSigninProps) => {
           </span>
         </div>
         {!gmailConnected && (
-          <button type="button" className="google-signin__sign-out" onClick={connectGmail}>
+          <button
+            type="button"
+            className="google-signin__sign-out"
+            onClick={() => void connectGmail()}
+          >
             Connect Gmail
           </button>
         )}
-        <button type="button" className="google-signin__sign-out" onClick={handleSignOut}>
+        <button
+          type="button"
+          className="google-signin__sign-out"
+          onClick={handleSignOut}
+        >
           Sign out
         </button>
       </div>
@@ -166,7 +189,7 @@ const GoogleSignin = ({ onAuthChange }: GoogleSigninProps) => {
         onSuccess={handleSuccess}
         onError={() => {
           console.error(
-            "Google login failed. Check VITE_GOOGLE_CLIENT_ID and Authorized JavaScript origins."
+            "Google login failed. Check VITE_GOOGLE_CLIENT_ID and Authorized JavaScript origins.",
           );
         }}
       />

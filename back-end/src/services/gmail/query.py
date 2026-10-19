@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, time, timedelta
+from email.utils import getaddresses, parseaddr
+from zoneinfo import ZoneInfo
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -109,18 +112,83 @@ def is_email_address(value: str) -> bool:
 
 
 def format_person_operator(op: str, value: str) -> str:
-    """Build ``from:`` / ``to:`` terms. Preserve exact addresses; quote multi-word names."""
+    """Preserve exact addresses; never interpret a person's name as an operator."""
+    if len(value) > 500 or any(ord(char) < 32 for char in value):
+        raise ValueError("Person filters must be at most 500 characters without control characters")
+    value = _clean(value).strip('"')
+    if not value:
+        return ""
+    _, address = parseaddr(value)
+    if is_email_address(address):
+        return f"{op}:{address}"
+    if not re.fullmatch(r"[\w .'+-]+", value):
+        raise ValueError("Use a person name or exact email address for sender/to")
+    return f'{op}:"{value}"' if " " in value else f"{op}:{value}"
+
+
+def gmail_timezone() -> str:
+    """Server-configured timezone until a validated per-user preference exists."""
+    from core.settings import GMAIL_TIMEZONE
+
+    ZoneInfo(GMAIL_TIMEZONE)
+    return GMAIL_TIMEZONE
+
+
+def calendar_window(window: str, *, now: datetime, timezone_name: str) -> tuple[str, str]:
+    """Gmail epoch boundaries; last_week is the previous Monday-to-Monday week."""
+    local = now.astimezone(ZoneInfo(timezone_name))
+    today = local.date()
+    if window == "today":
+        start, end = today, today + timedelta(days=1)
+    elif window == "yesterday":
+        start, end = today - timedelta(days=1), today
+    elif window == "last_week":
+        end = today - timedelta(days=today.weekday())
+        start = end - timedelta(days=7)
+    else:
+        raise ValueError("time_range must be today, yesterday, or last_week")
+    zone = ZoneInfo(timezone_name)
+    # Gmail after is exclusive; subtract one second to include midnight itself.
+    return (
+        str(int(datetime.combine(start, time.min, zone).timestamp()) - 1),
+        str(int(datetime.combine(end, time.min, zone).timestamp())),
+    )
+
+
+def _date_seconds(value: str, *, timezone_name: str, is_after: bool) -> str:
     value = _clean(value)
     if not value:
         return ""
-    # Strip wrapping angle brackets sometimes pasted from mail clients.
-    if value.startswith("<") and value.endswith(">"):
-        value = value[1:-1].strip()
-    if is_email_address(value):
-        return f"{op}:{value}"
-    if " " in value and not (value.startswith('"') and value.endswith('"')):
-        value = f'"{value}"'
-    return f"{op}:{value}"
+    if re.fullmatch(r"[0-9]{1,12}", value):
+        return value
+    try:
+        date = datetime.strptime(value.replace("-", "/"), "%Y/%m/%d").date()
+    except ValueError:
+        raise ValueError("Dates must be YYYY/MM/DD, YYYY-MM-DD, or epoch seconds") from None
+    seconds = int(datetime.combine(date, time.min, ZoneInfo(timezone_name)).timestamp())
+    return str(seconds - 1 if is_after else seconds)
+
+
+def _validate_query_text(value: str) -> None:
+    if len(value) > 1024 or any(ord(char) < 32 for char in value):
+        raise ValueError("Search text must be at most 1024 characters without control characters")
+    if value.count('"') % 2:
+        raise ValueError("Unclosed quote in Gmail query")
+    depth = 0
+    quoted = False
+    for char in value:
+        if char == '"':
+            quoted = not quoted
+        if quoted:
+            continue
+        if char in "({":
+            depth += 1
+        elif char in ")}":
+            depth -= 1
+        if depth < 0:
+            raise ValueError("Unbalanced Gmail query grouping")
+    if depth:
+        raise ValueError("Unbalanced Gmail query grouping")
 
 
 def person_tokens(*people: str) -> set[str]:
@@ -175,62 +243,46 @@ def build_gmail_query(
     in_sent: bool = False,
     raw_query: str = "",
     quote_subject: bool = False,
+    timezone_name: str = "UTC",
 ) -> str:
-    """Assemble a Gmail search query from structured filters + free text.
+    """AND structured constraints with grouped native Gmail terms.
 
-    Dates should be YYYY/MM/DD (Gmail style). newer_than/older_than use
-    Gmail relative forms like ``30d`` or ``1y``.
+    Calendar dates use the configured timezone; epoch boundaries are passed through.
+    The main agent plans alternatives explicitly. No automatic constraint dropping.
     """
-    parts: list[str] = []
-
-    sender_term = format_person_operator("from", sender)
-    if sender_term:
-        parts.append(sender_term)
-
-    to_term = format_person_operator("to", to)
-    if to_term:
-        parts.append(to_term)
-
-    subject = _clean(subject)
+    parts = [
+        term
+        for term in (format_person_operator("from", sender), format_person_operator("to", to))
+        if term
+    ]
+    subject = _clean(subject).strip('"')
     if subject:
-        if (
-            quote_subject
-            and " " in subject
-            and not (subject.startswith('"') and subject.endswith('"'))
-        ):
-            subject = f'"{subject}"'
-        parts.append(f"subject:{subject}")
-
-    after = _clean(after).replace("-", "/")
+        _validate_query_text(subject)
+        if '"' in subject:
+            raise ValueError("Subject must be a plain phrase")
+        parts.append(f'subject:"{subject}"')
+    after = _date_seconds(after, timezone_name=timezone_name, is_after=True)
+    before = _date_seconds(before, timezone_name=timezone_name, is_after=False)
+    if after and before and int(after) >= int(before):
+        raise ValueError("after must precede before")
     if after:
         parts.append(f"after:{after}")
-
-    before = _clean(before).replace("-", "/")
     if before:
         parts.append(f"before:{before}")
-
-    newer_than = _clean(newer_than)
-    if newer_than:
-        parts.append(f"newer_than:{newer_than}")
-
-    older_than = _clean(older_than)
-    if older_than:
-        parts.append(f"older_than:{older_than}")
-
+    for operator, value in (("newer_than", newer_than), ("older_than", older_than)):
+        if value:
+            if not re.fullmatch(r"[1-9][0-9]{0,3}[dmy]", value):
+                raise ValueError(f"{operator} must be a positive duration such as 7d or 1y")
+            parts.append(f"{operator}:{value}")
     if has_attachment:
         parts.append("has:attachment")
-
     if in_sent:
         parts.append("in:sent")
-
-    keywords = _clean(keywords)
-    if keywords:
-        parts.append(keywords)
-
-    raw_query = _clean(raw_query)
-    if raw_query:
-        parts.append(raw_query)
-
+    for text in (keywords, raw_query):
+        text = _clean(text)
+        if text:
+            _validate_query_text(text)
+            parts.append(f"({text})")
     return " ".join(parts)
 
 
@@ -249,33 +301,14 @@ def broaden_gmail_queries(
     in_sent: bool = False,
     raw_query: str = "",
 ) -> list[str]:
-    """Return increasingly broad Gmail queries (deduped, non-empty).
+    """Compatibility helper: one query preserving every explicit constraint.
 
-    When sender/recipient filters are present, keep them as long as possible —
-    dropping ``from:``/``to:`` too early is the main failure mode for
-    person-specific searches.
+    Only absent keyword hints may be extracted from a question. Broadening requires
+    another deliberate agent search; people, dates, subject and direction stay intact.
     """
-    sender = _clean(sender)
-    to = _clean(to)
-    explicit_people = bool(sender or to)
-    exclude = person_tokens(sender, to)
-    explicit_keywords = _clean(keywords)
-    extracted = extract_keywords(question, exclude=exclude)
-    keyword_text = explicit_keywords or extracted
-    # If keywords still contain person tokens, strip them.
-    if keyword_text and exclude:
-        keyword_text = " ".join(
-            tok for tok in keyword_text.split() if tok.lower() not in exclude
-        )
-
-    attempts: list[dict] = []
-
-    def add(**kwargs) -> None:
-        attempts.append(kwargs)
-
-    # 1) Full structured query.
-    add(
-        keywords=keyword_text,
+    query = build_gmail_query(
+        keywords=keywords
+        or (extract_keywords(question, exclude=person_tokens(sender, to)) if not raw_query else ""),
         sender=sender,
         to=to,
         subject=subject,
@@ -287,77 +320,28 @@ def broaden_gmail_queries(
         in_sent=in_sent,
         raw_query=raw_query,
     )
-    # 2) Drop subject (often over-specific).
-    add(
-        keywords=keyword_text,
-        sender=sender,
-        to=to,
-        after=after,
-        before=before,
-        newer_than=newer_than,
-        older_than=older_than,
-        has_attachment=has_attachment,
-        in_sent=in_sent,
-        raw_query=raw_query,
-    )
-    # 3) People + topic keywords (+ sent flag), no subject/dates/extras.
-    if explicit_people:
-        add(
-            keywords=keyword_text,
-            sender=sender,
-            to=to,
-            in_sent=in_sent,
-        )
-        # 4) People + date window only.
-        add(
-            sender=sender,
-            to=to,
-            after=after,
-            before=before,
-            newer_than=newer_than,
-            older_than=older_than,
-            in_sent=in_sent,
-        )
-        # 5) People filters alone (critical for "emails from John").
-        add(sender=sender, to=to, in_sent=in_sent)
-        # 6) Soften exact email → local-part only is dangerous; keep as-is.
-        # Last resort: people without in:sent if it was set.
-        if in_sent:
-            add(sender=sender, to=to, keywords=keyword_text)
-            add(sender=sender, to=to)
+    return [query] if query else []
 
-    # Keyword fallbacks only when no person constraint was given, or as absolute
-    # last resort after person-preserving attempts.
-    if not explicit_people:
-        add(
-            keywords=keyword_text,
-            after=after,
-            before=before,
-            newer_than=newer_than,
-            older_than=older_than,
-            has_attachment=has_attachment,
-            raw_query=raw_query,
-        )
-        add(keywords=keyword_text, newer_than=newer_than or "")
-        add(keywords=keyword_text)
-        if keyword_text and len(keyword_text.split()) > 1:
-            add(keywords=" OR ".join(keyword_text.split()))
-        if extracted and extracted != keyword_text:
-            add(keywords=extracted)
-    else:
-        # Absolute last resort if the name/address never matched.
-        if keyword_text:
-            add(keywords=keyword_text)
 
-    seen: set[str] = set()
-    queries: list[str] = []
-    for attempt in attempts:
-        q = build_gmail_query(**attempt)
-        if not q or q in seen:
-            continue
-        seen.add(q)
-        queries.append(q)
-    return queries
+def _person_matches(headers: list[str], person: str) -> bool:
+    person = _clean(person).strip('"')
+    _, address = parseaddr(person)
+    addresses = getaddresses(headers)
+    if is_email_address(address):
+        return any(candidate.casefold() == address.casefold() for _, candidate in addresses)
+    terms = re.findall(r"\w+", person.casefold())
+    if not terms:
+        return False
+    for name, candidate in addresses:
+        # Match complete tokens, never John within johnson@newsletter.example.
+        for text in (name, candidate):
+            tokens = re.findall(r"\w+", text.casefold())
+            if any(
+                tokens[index : index + len(terms)] == terms
+                for index in range(len(tokens) - len(terms) + 1)
+            ):
+                return True
+    return False
 
 
 def email_matches_people(
@@ -367,17 +351,7 @@ def email_matches_people(
     sender_filter: str = "",
     to_filter: str = "",
 ) -> bool:
-    """Loose post-filter: keep Gmail hits that still match person constraints."""
-    sender_filter = _clean(sender_filter).lower()
-    to_filter = _clean(to_filter).lower()
-    if sender_filter:
-        hay = (sender_header or "").lower()
-        needle = sender_filter.strip('"')
-        if needle not in hay:
-            return False
-    if to_filter:
-        hay = ", ".join(recipients or []).lower()
-        needle = to_filter.strip('"')
-        if needle not in hay:
-            return False
-    return True
+    """Parsed-address/name post-filter, failing closed on zero matches."""
+    return (not sender_filter or _person_matches([sender_header], sender_filter)) and (
+        not to_filter or _person_matches(recipients, to_filter)
+    )

@@ -5,9 +5,11 @@ from __future__ import annotations
 from langchain_core.documents import Document
 
 from services.gmail.models import Email
+from core.identity import require_identity
 
 
-def email_to_documents(email: Email, *, user_sub: str | None = None) -> list[Document]:
+def email_to_documents(email: Email, *, user_sub: str) -> list[Document]:
+    require_identity(user_sub)
     received = email.received_at.isoformat() if email.received_at else ""
     recipients = ", ".join(email.recipients)
     page_content = (
@@ -27,8 +29,6 @@ def email_to_documents(email: Email, *, user_sub: str | None = None) -> list[Doc
         "sender": email.sender,
         "recipients": recipients,
         "received_at": received,
+        "user_sub": user_sub,
     }
-    if user_sub:
-        metadata["user_sub"] = user_sub
-
     return [Document(page_content=page_content, metadata=metadata)]
